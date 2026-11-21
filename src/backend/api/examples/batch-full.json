@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1.0",
+  "deviceId": "phone-stefana-01",
+  "ownerId": "team-verity",
+  "sessionId": "s-20261121-101530-7f3a",
+  "batchId": "b-7f3a-000042",
+  "sentAt": "2026-11-21T10:15:31.020Z",
+  "device": { "platform": "android", "model": "Pixel 7", "appVersion": "0.1.0" },
+  "capabilities": { "accelerometer": true, "magnetometer": true, "barometer": true, "gps": true },
+  "sampling": { "sensorIntervalMs": 100, "gpsIntervalMs": 1000 },
+  "events": [
+    { "eventType": "accelerometer", "value": { "x": 0.02, "y": 0.17, "z": 0.98 }, "unit": "g", "timestamp": "2026-11-21T10:15:30.100Z", "seq": 1532 },
+    { "eventType": "magnetometer", "value": { "x": 1.4, "y": 21.5, "z": -40.8 }, "unit": "uT", "timestamp": "2026-11-21T10:15:30.102Z", "seq": 1533 },
+    { "eventType": "barometer", "value": { "pressure": 1012.62 }, "unit": "hPa", "timestamp": "2026-11-21T10:15:30.105Z", "seq": 1534 },
+    { "eventType": "accelerometer", "value": { "x": 0.03, "y": 0.18, "z": 0.97 }, "unit": "g", "timestamp": "2026-11-21T10:15:30.200Z", "seq": 1535 },
+    { "eventType": "magnetometer", "value": { "x": 1.6, "y": 21.3, "z": -40.9 }, "unit": "uT", "timestamp": "2026-11-21T10:15:30.202Z", "seq": 1536 },
+    { "eventType": "gps", "value": { "latitude": 44.435123, "longitude": 26.102456, "altitude": 92.4, "accuracy": 6.5, "altitudeAccuracy": 4.0, "speed": 1.2, "heading": 87.0 }, "unit": "wgs84", "timestamp": "2026-11-21T10:15:30.950Z", "seq": 1537 }
+  ]
+}

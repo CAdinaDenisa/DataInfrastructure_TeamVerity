@@ -1,0 +1,53 @@
+# Mediul local care imită Azure:
+#   sql      = SQL Server 2022 (același motor T-SQL ca Azure SQL Database)
+#   azurite  = emulatorul oficial Azure Storage (AzureWebJobsStorage pentru Functions)
+# Din src/backend/api:  npm run db:up   /  npm run db:down   (date șterse: docker compose -f ../database/docker-compose.yml down -v)
+services:
+  sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64   # pe Mac M1/M2/M3: Docker Desktop -> Settings -> "Use Rosetta"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Local_Dev_Passw0rd!"   # DOAR local; în Azure nu folosim sa
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqldata:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      retries: 10
+      start_period: 20s
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
+    ports:
+      - "10000:10000"
+      - "10001:10001"
+      - "10002:10002"
+
+  # Opțional: runtime-ul Azure Functions în Docker, pentru cine nu are Azure Functions Core Tools.
+  #   npm run api:docker (din src/backend/api)      -> API pe http://localhost:7071
+  api:
+    profiles: ["api"]
+    image: mcr.microsoft.com/azure-functions/node:4-node20
+    depends_on:
+      sql:
+        condition: service_healthy
+    environment:
+      AzureWebJobsScriptRoot: /home/site/wwwroot
+      AzureFunctionsJobHost__Logging__Console__IsEnabled: "true"
+      FUNCTIONS_WORKER_RUNTIME: node
+      AzureWebJobsStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;"
+      STORAGE_MODE: sql
+      SQL_CONNECTION_STRING: "Server=sql,1433;Database=porsche_hecaton;User Id=sa;Password=Local_Dev_Passw0rd!;Encrypt=true;TrustServerCertificate=true"
+      DEVICE_API_KEY: ""
+    ports:
+      - "7071:80"
+    volumes:
+      - ../api:/home/site/wwwroot
+
+volumes:
+  sqldata:
