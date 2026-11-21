@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Porsche Hecaton — Dashboard Telemetrie</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Porsche Hecaton — Telemetrie</h1>
+    <div id="connection-status" class="status offline">Offline</div>
+  </header>
+
+  <main class="container">
+    <section class="card">
+      <h2>Stare curentă dispozitiv (<span id="device-label">-</span>)</h2>
+      <div class="metrics-grid">
+        <div class="metric">
+          <span class="label">Pitch / Roll / Yaw</span>
+          <strong id="orientation-val">0° / 0° / 0°</strong>
+        </div>
+        <div class="metric">
+          <span class="label">Altitudine relativă</span>
+          <strong id="altitude-val">Indisponibilă</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="charts-grid">
+      <div class="card">
+        <h3>Accelerometru (g)</h3>
+        <canvas id="accelChart"></canvas>
+      </div>
+      <div class="card">
+        <h3>Magnetometru (µT)</h3>
+        <canvas id="magChart"></canvas>
+      </div>
+      <div class="card">
+        <h3>Barometru (hPa)</h3>
+        <canvas id="baroChart"></canvas>
+      </div>
+    </section>
+  </main>
+
+  <!-- 1. Configurația -->
+  <script src="./config.js"></script>
+  <!-- 2. Bundle-ul local Chart.js UMD (înainte de scriptul aplicației) -->
+  <script src="./vendor/chart.umd.js"></script>
+  <!-- 3. Scriptul principal al aplicației -->
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
