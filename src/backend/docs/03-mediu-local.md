@@ -34,6 +34,8 @@ npm start                # = func start -> http://localhost:7071/api/...
 
 **Fără Docker deloc** (ex. un coleg care face doar dashboard-ul): în `local.settings.json` pune `"STORAGE_MODE": "memory"`. API-ul merge, dar datele dispar la repornire.
 
+**Autorizarea local**: exemplul are `"AUTH_MODE": "disabled"`, deci nu e nevoie de token. Ca să testezi tokenurile ca în Azure: șterge `AUTH_MODE`, rulează `npm run token:new -- company_A CAR-01`, pune intrarea afișată într-o listă în `DEMO_TENANTS_JSON` (ex. `"[{...}]"`), repornește API-ul și trimite `Authorization: Bearer <token>` (simulator: `--token <token>`).
+
 ## Testare
 
 ```bash
@@ -48,16 +50,15 @@ curl http://localhost:7071/api/devices
 curl http://localhost:7071/api/devices/phone-sim-01/state
 curl "http://localhost:7071/api/devices/phone-sim-01/readings?type=accelerometer&limit=50"
 
-npm test                                # teste unitare (fără bază de date)
-# și testele pe baza locală (PowerShell: $env:SQL_CONNECTION_STRING="...")
-SQL_CONNECTION_STRING="Server=localhost,1433;Database=porsche_hecaton;User Id=sa;Password=Local_Dev_Passw0rd!;Encrypt=true;TrustServerCertificate=true" npm test
+npm run ci                              # verificări + teste (fără bază de date), ca în pipeline
+npm run test:sql                        # aceleași teste și pe SQL Server-ul local (după db:up + db:migrate)
 ```
 
 Atenție: exemplele din `examples/` au timestamp-uri fixe din 21.11.2026; backend-ul respinge loturi mai vechi de 24 h, deci pentru curl după acea zi folosește simulatorul sau actualizează timestamp-urile.
 
 ## Telefonul real pe aceeași rețea Wi-Fi
 
-`localhost` de pe telefon este telefonul, nu laptopul. În `src/phone-app/.env` pune IP-ul laptopului: `EXPO_PUBLIC_API_URL=http://192.168.x.y:7071` (fără `/api/telemetry`). Token-ul din aplicație poate fi orice text cât timp `DEVICE_API_KEY` e gol (afli IP-ul cu `ipconfig` / `ifconfig`). Dacă nu merge: permite portul 7071 în firewall sau folosește `npx expo start --tunnel` + un tunel pentru API (ex. VS Code „Ports” -> Forward port 7071, vizibilitate Public).
+`localhost` de pe telefon este telefonul, nu laptopul. În `src/phone-app/.env` pune IP-ul laptopului: `EXPO_PUBLIC_API_URL=http://192.168.x.y:7071` (fără `/api/telemetry`). Tokenul din aplicație poate fi orice text cât timp `AUTH_MODE=disabled` (afli IP-ul cu `ipconfig` / `ifconfig`). Dacă nu merge: permite portul 7071 în firewall sau folosește `npx expo start --tunnel` + un tunel pentru API (ex. VS Code „Ports” -> Forward port 7071, vizibilitate Public).
 
 ## Oprire / resetare
 

@@ -1,100 +1,75 @@
 # Trecerea la Azure real
 
-Codul **nu se schimbă**. Singurul loc din cod care citește configurarea este [`api/src/lib/config.js`](../api/src/lib/config.js), care ia valorile din variabile de mediu:
+Resursele Azure le creează **Adina** cu Bicep (`infrastructure/main.bicep`): Azure SQL (autentificare doar Microsoft Entra, fără parolă), Function App pe Flex Consumption (Node 24, cu Managed Identity), storage pentru host și Static Web App. Backend-ul **nu are nevoie de modificări de cod** pentru Azure: citește setările pe care le pune Bicep-ul.
 
-| Setare | Local (`local.settings.json`) | În Azure (Function App -> Settings -> Environment variables -> App settings) |
+## Setările pe care le citește backend-ul
+
+Singurul loc din cod care citește configurarea: [`api/src/lib/config.js`](../api/src/lib/config.js).
+
+| Setare | Local (`local.settings.json`) | Azure (setat de Bicep) |
 |---|---|---|
-| `SQL_CONNECTION_STRING` | SQL Server din Docker | connection string-ul Azure SQL (pasul 2) |
-| `STORAGE_MODE` | `sql` (sau `memory`) | `sql` |
-| `DEVICE_API_KEY` | gol (fără verificare) | o cheie lungă aleatoare; în aplicația de telefon se introduce în câmpul „token” (trimisă ca `Authorization: Bearer`) |
-| `AzureWebJobsStorage` | `UseDevelopmentStorage=true` (Azurite) | completat automat la crearea Function App |
+| `STORAGE_MODE` | `sql` (sau `memory`) | `azure-sql` |
+| `SQL_CONNECTION_STRING` | SQL Server din Docker, cu user/parolă | **nu se setează** |
+| `SQL_SERVER` | — | `<server>.database.windows.net` (output `sqlServerFqdn`) |
+| `SQL_DATABASE` | — | `telemetrydb` (output `sqlDatabaseName`) |
+| `AUTH_MODE` | `disabled` (explicit, doar local) | **nu se setează** -> autorizarea e activă |
+| `DEMO_TENANTS_JSON` | gol sau o hartă de test | harta firmă -> hash token (secretă) |
+| `APP_BUILD_VERSION` | — | opțional: commit-ul deploy-at (apare în `/api/health`) |
 
-> Interfața portalului se mai schimbă. Dacă un buton are alt nume, caută după ideea pasului.
+Cu `SQL_SERVER` setat, backend-ul se conectează prin **DefaultAzureCredential**: în Azure folosește identitatea Function App (Managed Identity), pe laptop folosește contul din `az login`. Nicio parolă nu ajunge în setări sau în cod.
 
-## 0. Pregătire
+## Pași (o singură dată, după ce Adina rulează Bicep-ul)
 
-- portal.azure.com, logat cu contul de Azure for Students. Verifică la **Subscriptions** că vezi „Azure for Students”.
-- Creează un **Resource group**: `rg-porsche-hecaton`. Toate resursele de mai jos merg în el (la final ștergi grupul și dispare tot).
-- **Regiunea**: abonamentele Student permit doar unele regiuni. Alege una permisă și apropiată (de ex. West Europe, North Europe, Sweden Central, Poland Central) și folosește aceeași pentru tot.
+### 1. Tabelele și accesul aplicației în Azure SQL
 
-## 1. Azure SQL Database (oferta gratuită)
-
-1. Caută **SQL databases** -> **+ Create**. Sus apare bannerul **„Want to try Azure SQL Database for free?” -> Apply offer**. Apasă-l: asta setează tier-ul gratuit.
-2. **Basics**: resource group `rg-porsche-hecaton`, nume bază `porsche_hecaton`, **Server: Create new**:
-   - nume server unic, ex. `porsche-hecaton-sql-<inițiale>` (devine `<nume>.database.windows.net`)
-   - Authentication: **Use SQL authentication** (cel mai simplu pentru proiect); alegi un admin login + parolă puternică. Păstrează-le într-un manager de parole, nu pe git.
-3. **Free offer**: Compute = General Purpose, **Serverless**. La „Behavior when free limit reached” alege **Auto-pause the database until next month** (așa nu plătești niciodată; alternativa „Continue using database for additional charges” costă).
-4. **Networking**: Connectivity = **Public endpoint**; „Allow Azure services and resources to access this server” = **Yes** (ca să poată intra Function App); „Add current client IP address” = **Yes** (ca să rulezi migrarea de pe laptop). Colegii care vor să se conecteze direct se adaugă la SQL server -> Security -> Networking.
-5. Review + create.
-
-**Limitele ofertei gratuite** (lunar, per bază; verifică în portal, Microsoft le mai ajustează): ~100.000 vCore-secunde de calcul, 32 GB date. Baza se pune singură în pauză când nu e folosită și se trezește la prima conexiune (prima cerere poate dura ~1 minut, de aceea API-ul răspunde 503 și telefonul reîncearcă). Calculul se consumă doar cât timp baza e trează, deci **nu lăsa simulatorul sau aplicația să trimită date non-stop** zile întregi.
-
-## 2. Connection string-ul
-
-SQL database `porsche_hecaton` -> **Settings -> Connection strings -> ADO.NET (SQL authentication)**. Arată așa:
-
-```
-Server=tcp:porsche-hecaton-sql-xx.database.windows.net,1433;Initial Catalog=porsche_hecaton;Persist Security Info=False;User ID=<admin>;Password={your_password};MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;
-```
-
-Înlocuiești `{your_password}` cu parola și pui `Connection Timeout=60` (timp pentru trezirea din pauză). Pachetul `mssql` folosit de noi înțelege direct acest format.
-
-## 3. Creezi tabelele în Azure SQL (de pe laptop)
+Îl rulează administratorul SQL Entra (contul din `sqlAdminLogin` din Bicep), de pe un calculator al cărui IP e permis (`sqlAdminIp`):
 
 ```bash
+az login                                  # cu contul de administrator SQL Entra
 cd src/backend/api
-# bash / Git Bash / Mac:
-SQL_CONNECTION_STRING="Server=tcp:...;Password=...;Connection Timeout=60;" npm run db:migrate
-# PowerShell:
-$env:SQL_CONNECTION_STRING="Server=tcp:...;Password=...;Connection Timeout=60;"; npm run db:migrate
+npm ci
+# bash
+SQL_SERVER=<sqlServerFqdn> SQL_DATABASE=telemetrydb npm run db:migrate -- --grant-app <functionAppName>
+# PowerShell
+$env:SQL_SERVER="<sqlServerFqdn>"; $env:SQL_DATABASE="telemetrydb"; npm run db:migrate -- --grant-app <functionAppName>
 ```
 
-Trebuie să vezi `+ 001_init.sql`. Dacă primești „Client with IP address ... is not allowed”: SQL server -> Security -> Networking -> adaugă IP-ul tău. (Scriptul nu creează baza în Azure, doar tabelele: baza ai creat-o la pasul 1.)
+Așteptat: `+ 001_init.sql`, `+ 002_session_stats.sql`, `+ 003_auth_and_payloads.sql`, apoi `+ acces SELECT/INSERT/UPDATE ... pentru <functionAppName>`.
 
-Verificare: în portal, baza -> **Query editor (preview)** -> logare -> `SELECT name FROM sys.tables`.
+- Migrările creează tabelele **noastre** (`devices`, `sessions`, `batches`, `sensor_readings`, `device_states`). Ele înlocuiesc scripturile `dbo.Telemetry` din ghidul inițial.
+- `--grant-app` creează utilizatorul pentru identitatea Function App și îi dă doar `SELECT, INSERT, UPDATE` pe schema `dbo`. Nu primește DELETE și nici drepturi de modificare a schemei. Varianta manuală e scriptul [`database/grants/grant_function_access.sql`](../database/grants/grant_function_access.sql), rulat în VS Code cu extensia MSSQL.
+- La o migrare nouă (`004_...sql`) se rulează din nou doar `npm run db:migrate`. CD-ul nu rulează migrări, intenționat: aplicația nu are drept să modifice schema.
 
-## 4. Function App
+### 2. Tokenurile firmelor
 
-1. Caută **Function App** -> **+ Create** -> plan de găzduire **Flex Consumption** (dacă nu e disponibil în regiunea ta: **Consumption**). Ambele au o cotă lunară gratuită de execuții, suficientă pentru proiect.
-2. Runtime stack **Node.js**, versiune **20** (sau 22), OS Linux, același resource group și regiune.
-3. Storage: lasă-l să creeze un storage account nou (costă cenți; acesta înlocuiește Azurite).
-4. **Monitoring**: Application Insights = Yes (are cotă gratuită; util pentru loguri și pentru raportul DevOps).
-5. Review + create.
+```bash
+npm run token:new -- company_A CAR-01 --hours 24
+npm run token:new -- company_B CAR-02 --hours 24
+```
 
-## 5. Setările aplicației (aici intră Azure real)
+Fiecare comandă afișează tokenul brut (îl dai privat testerilor firmei, care îl introduc în aplicație sau în dashboard) și intrarea JSON cu **hash-ul**. Intrările se pun într-o listă `[ ... , ... ]` în `demoTenantsJson` din `infrastructure/private.parameters.json` (fișierul Adinei, ignorat de git), iar Bicep-ul o pune în setarea `DEMO_TENANTS_JSON`. Alternativ, folosiți scriptul PowerShell din ghidul Adinei, care produce exact același format.
 
-Function App -> **Settings -> Environment variables -> App settings -> + Add**:
+### 3. Deploy și verificare
 
-| Name | Value |
-|---|---|
-| `SQL_CONNECTION_STRING` | connection string-ul de la pasul 2 |
-| `STORAGE_MODE` | `sql` |
-| `DEVICE_API_KEY` | o cheie aleatoare (ex. `node -e "console.log(require('crypto').randomUUID())"`) |
+Deploy-ul îl face workflow-ul Adinei din folderul `src/backend/api` (vezi [06-securitate-si-operare.md](06-securitate-si-operare.md#pentru-adina)). După deploy:
 
-**Apply** -> **Confirm** (aplicația repornește). Variantă mai sigură, pentru nota de DevOps: pui connection string-ul în **Key Vault** și în App setting scrii `@Microsoft.KeyVault(SecretUri=https://<vault>.vault.azure.net/secrets/sql-conn/)`, cu Managed Identity activată pe Function App. Codul rămâne identic.
+```bash
+curl https://<functionBaseUrl>/api/health
+# {"status":"ok","storageMode":"sql","database":"ok","auth":"enabled",...}
 
-**CORS** (pentru dashboard): Function App -> **API -> CORS** -> adaugi URL-ul dashboard-ului (ex. `https://<nume>.azurestaticapps.net`) și, pentru dezvoltare, `http://localhost:5173`.
+npm run simulate -- --url https://<functionBaseUrl> --token <token company_A> --owner company_A --vehicle CAR-01 --seconds 10
+```
 
-## 6. Deploy al codului
+- `database: "unreachable"` -> verifică grant-ul (pasul 1), firewall-ul SQL (`allowAzureServices`) și că `SQL_SERVER` e FQDN-ul corect.
+- `auth: "enabled-no-tenants"` -> `DEMO_TENANTS_JSON` e gol: niciun token nu trece.
+- `auth: "misconfigured"` -> `DEMO_TENANTS_JSON` nu e JSON valid.
 
-Oricare dintre:
+Aplicația de telefon: `src/phone-app/.env` -> `EXPO_PUBLIC_API_URL=https://<functionBaseUrl>`, iar tokenul firmei se introduce în câmpul „token”.
 
-- **VS Code**: extensia Azure Functions -> click dreapta pe folderul `src/backend/api` -> „Deploy to Function App...”.
-- **Linie de comandă** (Azure CLI + Core Tools): `az login`, apoi din `src/backend/api`: `func azure functionapp publish <nume-function-app>`.
-- **GitHub Actions** (pasul de CI/CD din plan): Function App -> **Deployment Center** -> Source: GitHub -> alegi repo-ul, branch `main`, apoi în workflow-ul generat setezi folderul aplicației la `src/backend/api`. Portalul generează workflow-ul. Secretele rămân în Azure/GitHub Secrets, niciodată în cod.
+## Varianta fără Bicep (manual, din portal)
 
-Fișierul `src/backend/api/.funcignore` exclude din deploy testele, exemplele, scripturile și `local.settings.json`.
+Dacă vreți vreodată o bază separată, de test, creată din portal (de ex. cu oferta gratuită Azure SQL): setați aceleași `SQL_SERVER` / `SQL_DATABASE` și rulați pasul 1. Cu autentificare SQL (user/parolă) se poate folosi și `SQL_CONNECTION_STRING`, cu formatul ADO.NET din portal (Connection strings), dar în mediul echipei rămâne varianta fără parolă.
 
-## 7. Verificare și conectarea telefonului
+## Costuri
 
-- Function App -> **Overview -> Default domain**: ex. `https://porsche-hecaton-api.azurewebsites.net` (la Flex Consumption poate avea un sufix generat).
-- Test din laptop: `npm run simulate -- --url https://<default-domain> --key <DEVICE_API_KEY> --seconds 10`.
-- În aplicația de telefon: `src/phone-app/.env` -> `EXPO_PUBLIC_API_URL=https://<default-domain>` (fără `/api/telemetry`), iar în câmpul „token” din aplicație se introduce valoarea `DEVICE_API_KEY`.
-- Loguri: Function App -> **Log stream**, sau Application Insights -> **Failures**.
-
-## Costuri: ce să eviți
-
-- Nu alege tier-uri „Provisioned”/„Business Critical” la SQL și nici plan „Premium”/„App Service” la Function App.
-- Păstrează la SQL „Auto-pause the database until next month”.
-- Setează un buget: **Cost Management -> Budgets** -> ex. 5 USD cu alertă pe email.
-- La final de semestru: șterge resource group-ul `rg-porsche-hecaton`.
+Bicep-ul Adinei folosește Azure SQL **Basic (5 DTU, 2 GB)**: e mic, dar se plătește din creditul Azure for Students. Nu e oferta gratuită și nu intră în pauză singur. După demo, ștergeți resource group-ul (pasul de cleanup din ghidul Adinei).

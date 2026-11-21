@@ -5,7 +5,8 @@
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "STORAGE_MODE": "sql",
     "SQL_CONNECTION_STRING": "Server=localhost,1433;Database=porsche_hecaton;User Id=sa;Password=Local_Dev_Passw0rd!;Encrypt=true;TrustServerCertificate=true",
-    "DEVICE_API_KEY": ""
+    "AUTH_MODE": "disabled",
+    "DEMO_TENANTS_JSON": ""
   },
   "Host": {
     "LocalHttpPort": 7071,

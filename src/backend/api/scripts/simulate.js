@@ -6,7 +6,7 @@
  *
  *   npm run simulate                                   # 30 s către http://localhost:7071
  *   npm run simulate -- --seconds 120 --device phone-test-02 --no-barometer
- *   npm run simulate -- --url https://<app>.azurewebsites.net --key <DEVICE_API_KEY>
+ *   npm run simulate -- --url https://<app>.azurewebsites.net --token <token firmă> --owner company_A --vehicle CAR-01
  */
 const crypto = require('crypto');
 const { orientationToSensors } = require('../src/lib/fusion');
@@ -19,7 +19,9 @@ const BASE_URL = opt('url', 'http://localhost:7071').replace(/\/$/, '');
 const DEVICE_ID = opt('device', 'phone-sim-01');
 const SECONDS = Number(opt('seconds', '30'));
 const HZ = Number(opt('hz', '10'));
-const KEY = opt('key', process.env.DEVICE_API_KEY || '');
+const TOKEN = opt('token', process.env.DEMO_TOKEN || '');
+const OWNER = opt('owner', 'company_A');
+const VEHICLE = opt('vehicle', 'CAR-01');
 const caps = { accelerometer: true, magnetometer: true, barometer: !flag('no-barometer'), gps: !flag('no-gps') };
 
 const sessionId = `s-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-${crypto.randomBytes(2).toString('hex')}`;
@@ -71,14 +73,14 @@ async function main() {
       });
     }
     const batch = {
-      schemaVersion: '1.0', deviceId: DEVICE_ID, ownerId: 'team-verity', sessionId,
+      schemaVersion: '1.0', deviceId: DEVICE_ID, ownerId: OWNER, vehicleId: VEHICLE, sessionId,
       batchId: `b-${crypto.randomUUID()}`, sentAt: new Date(start + (s + 1) * 1000).toISOString(),
       device: { platform: 'simulator', model: 'scripts/simulate.js', appVersion: '0.0.0' },
       capabilities: caps, sampling: { sensorIntervalMs: Math.round(1000 / HZ), gpsIntervalMs: 1000 }, events,
     };
     const res = await fetch(`${BASE_URL}/api/telemetry`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(KEY ? { 'x-device-key': KEY } : {}) },
+      headers: { 'Content-Type': 'application/json', ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}) },
       body: JSON.stringify(batch),
     });
     const body = await res.json().catch(() => ({}));
