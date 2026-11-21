@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // introdusă de șofer o singură dată, la prima pornire.
 // VIN-ul se trimite ca deviceId și vehicleId; dashboard-ul îl folosește ca ID al mașinii.
 export const OWNER = { id: 'porsche', name: 'Porsche' };
+export const MODEL = "911"; // modelul afisat langa PORSCHE
 
 // VIN standard (ISO 3779): 17 caractere, litere și cifre, fără I, O, Q (se confundă cu 1 și 0).
 const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/;

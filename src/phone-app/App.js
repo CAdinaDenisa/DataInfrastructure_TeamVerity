@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { StatusBar } from 'expo-status-bar';
 import {
   AppState,
-  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -14,14 +13,14 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import carImage from './src/carImage';
+import CarShowcase from './src/CarShowcase';
 import Compass from './src/Compass';
 import GMeter from './src/GMeter';
 import { relativeAltitude } from './src/altitude';
 import { API_URL, BASELINE_SAMPLES, CAPTURE_INTERVAL_MS } from './src/config';
 import { buildEvent, stableAverage } from './src/event';
 import VinSetup from './src/VinSetup';
-import { OWNER, loadVin, normalizeVin, saveVin, vinError } from './src/vehicle';
+import { MODEL, OWNER, loadVin, normalizeVin, saveVin, vinError } from './src/vehicle';
 import { getDeviceId, newId } from './src/ids';
 import * as Queue from './src/queue';
 import { createSender } from './src/sender';
@@ -266,8 +265,8 @@ function CarScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         {/* antet: apăsare lungă = Diagnostic (ascuns pentru șofer) */}
         <Pressable onLongPress={() => setDiagOpen(true)} delayLongPress={800}>
-          {carImage ? <Image source={carImage} style={styles.car} resizeMode="contain" /> : null}
-          <Text style={styles.brand}>{OWNER.name.toUpperCase()}</Text>
+          <CarShowcase />
+          <Text style={styles.brand}>{OWNER.name.toUpperCase()} <Text style={styles.brandModel}>{MODEL}</Text></Text>
           <Text style={styles.vinHeader}>{vin}</Text>
         </Pressable>
 
@@ -397,6 +396,7 @@ const styles = StyleSheet.create({
   content: { padding: 18, paddingBottom: 48 },
   car: { width: '100%', height: 170, marginBottom: 8 },
   brand: { color: '#5fa2ff', letterSpacing: 5, fontSize: 12, fontWeight: '600', textAlign: 'center' },
+  brandModel: { color: "#e8eefc", fontSize: 15, fontWeight: "700", letterSpacing: 3 },
   title: { color: '#fff', fontSize: 26, fontWeight: '300', textAlign: 'center', marginTop: 4, marginBottom: 8 },
   vinHeader: { color: '#6b768c', fontSize: 13, textAlign: 'center', marginTop: 4, marginBottom: 8, letterSpacing: 2, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
   btnPrimary: { backgroundColor: '#1e6bff', marginTop: 16 },
