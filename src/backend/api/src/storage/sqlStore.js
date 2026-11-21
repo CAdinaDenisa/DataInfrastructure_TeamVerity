@@ -11,7 +11,16 @@ function createSqlStore(connectionString) {
   let poolPromise;
   const pool = () => {
     if (!poolPromise) {
-      poolPromise = new sql.ConnectionPool(connectionString).connect().catch((err) => {
+      const isManagedIdentity = /azure-active-directory-default/i.test(connectionString);
+      const poolConfig = isManagedIdentity
+        ? {
+            server: process.env.SQL_SERVER || 'teamverity-sql-cqnazavdlt5aw.database.windows.net',
+            database: process.env.SQL_DATABASE || 'telemetrydb',
+            authentication: { type: 'azure-active-directory-default' },
+            options: { encrypt: true, trustServerCertificate: false },
+          }
+        : connectionString;
+      poolPromise = new sql.ConnectionPool(poolConfig).connect().catch((err) => {
         poolPromise = undefined; // reîncearcă la următoarea cerere (ex. Azure SQL serverless se trezește din pauză)
         throw err;
       });
