@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Detalii Raport — Porsche Hecaton</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body class="porsche-bg">
+  <header class="topbar">
+    <div class="brand">
+      <a href="./index.html" class="btn-ghost">← Înapoi la flotă</a>
+      <div>
+        <h1 id="report-title">Raport Telemetrie</h1>
+        <p id="report-subtitle" class="subtitle">Se încarcă datele...</p>
+      </div>
+    </div>
+    <div id="report-badge" class="status online">Raport Complet</div>
+  </header>
+
+  <main class="container">
+    <!-- SUS STÂNGA: Poza mașinii pe tot panoul | SUS DREAPTA: Valorile colectate -->
+    <section class="report-hero-large">
+      <div class="card car-showcase-full">
+        <img id="car-photo" alt="Fotografie vehicul Porsche" />
+        <div class="car-showcase-caption">
+          <div>
+            <h2 id="car-model-name">Porsche 911 Turbo S</h2>
+            <p class="muted">Telemetrie: Accelerometru • Magnetometru • Barometru</p>
+          </div>
+          <span class="car-overlay-tag" id="car-device-tag">phone-daniela-01</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Valori colectate (Sesiune &amp; Punct curent)</h3>
+        <div class="values-grid-3">
+          <div class="metric">
+            <span class="label">Altitudine (Max / Curent)</span>
+            <strong id="val-alt">+38.2 m / +0.0 m</strong>
+            <small>Barometru relativ</small>
+          </div>
+          <div class="metric">
+            <span class="label">Orientare (Pitch / Roll / Yaw)</span>
+            <strong id="val-orient">0.0° / 0.0° / 0.0°</strong>
+            <small>Fuziune senzori</small>
+          </div>
+          <div class="metric">
+            <span class="label">Distanță &amp; Durată</span>
+            <strong id="val-dist">8.7 km • 24 min</strong>
+            <small>Dead reckoning</small>
+          </div>
+          <div class="metric">
+            <span class="label">Accelerometru (X, Y, Z)</span>
+            <strong id="val-accel">0.02, -0.98, 0.11 g</strong>
+            <small>Accelerație liniară + g</small>
+          </div>
+          <div class="metric">
+            <span class="label">Magnetometru (X, Y, Z)</span>
+            <strong id="val-mag">21.4, -5.2, -40.8 µT</strong>
+            <small>Câmp magnetic (Busolă)</small>
+          </div>
+          <div class="metric">
+            <span class="label">Barometru (Presiune)</span>
+            <strong id="val-baro">1012.6 hPa</strong>
+            <small>Min: 1008.5 • Max: 1013.2</small>
+          </div>
+        </div>
+
+        <div class="reports-table-wrapper" style="margin-top: 1.15rem;">
+          <h4>Citiri reprezentative din sesiune</h4>
+          <table class="reports-table">
+            <thead>
+              <tr>
+                <th>Timp UTC</th>
+                <th>Accel (g)</th>
+                <th>Mag (µT)</th>
+                <th>Baro (hPa)</th>
+                <th>Altitudine</th>
+                <th>Pitch / Roll</th>
+              </tr>
+            </thead>
+            <tbody id="readings-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- JOS ÎMPĂRȚIT ÎN DOUĂ: Stânga = Traiectorie 3D | Dreapta = Grafic cu datele -->
+    <section class="report-bottom-split">
+      <div class="card">
+        <div class="map-header">
+          <div>
+            <h3>Traiectorie 3D &amp; Elevație</h3>
+            <p class="muted">Mașina urcă, coboară și se înclină pe traseu</p>
+          </div>
+          <div class="playback-controls">
+            <button id="play-pause-btn" class="btn-primary">⏸ Pauză</button>
+            <input type="range" id="timeline-slider" min="0" max="100" value="0" />
+            <span id="live-alt-readout" class="alt-pill">+0.0 m</span>
+          </div>
+        </div>
+
+        <div class="canvas-3d-wrapper">
+          <canvas id="trajectoryCanvas" width="760" height="360"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="map-header">
+          <div>
+            <h3>Grafic Altitudine &amp; Înclinație</h3>
+            <p class="muted">Evoluția pe parcursul traseului</p>
+          </div>
+        </div>
+        <div class="chart-box-wrapper">
+          <canvas id="reportTelemetryChart"></canvas>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="./config.js"></script>
+  <script src="./vendor/chart.umd.js"></script>
+  <script type="module" src="./report.js"></script>
+</body>
+</html>

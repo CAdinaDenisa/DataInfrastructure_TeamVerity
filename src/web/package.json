@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "http-server . -p 5173 -c-1",
-    "check": "node --check app.js && node --check charts.js",
+    "check": "node --check app.js && node --check report.js",
     "build": "node scripts/build.mjs"
   },
   "dependencies": {
