@@ -3,4 +3,4 @@ local.settings.json
 .env
 .expo/
 dist/
-build/
+build/.DS_Store
