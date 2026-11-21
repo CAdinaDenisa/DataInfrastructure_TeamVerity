@@ -58,6 +58,7 @@ function CarScreen() {
   const [token, setToken] = useState(''); // doar în memorie, niciodată salvat
   const [showToken, setShowToken] = useState(false);
   const [tracking, setTracking] = useState(false);
+  const [sending, setSending] = useState(false); // butonul Start/Stop: trimitem sau nu la Azure
   const [sessionId, setSessionId] = useState(null);
   const [baselineHpa, setBaselineHpa] = useState(null);
   const [queueSnap, setQueueSnap] = useState(Queue.snapshot());
@@ -73,6 +74,7 @@ function CarScreen() {
   const baselineRef = useRef(null);
   const sessionRef = useRef(null);
   const trackingRef = useRef(false);
+  const sendingRef = useRef(false);
   const stopSensorsRef = useRef(null);
   const captureTimer = useRef(null);
   const uiTimer = useRef(null);
@@ -127,7 +129,7 @@ function CarScreen() {
 
   // ---------- captură la 2 secunde ----------
   const capture = useCallback(async () => {
-    if (!trackingRef.current) return;
+    if (!trackingRef.current || !sendingRef.current) return; // trimiterea e oprită din buton
     const status = statusRef.current;
     const { ownerId, vehicleId } = contextRef.current;
     if (!vehicleId || !latest.current.acceleration) return; // accelerometrul e obligatoriu
@@ -241,6 +243,21 @@ function CarScreen() {
     setVin(null); // înapoi la ecranul de introducere
   };
 
+  // ---------- butonul Start / Stop trimitere ----------
+  const toggleSending = () => {
+    if (sendingRef.current) {
+      sendingRef.current = false; // nu mai capturăm; ce e deja în coadă se trimite în continuare
+      setSending(false);
+      return;
+    }
+    sendingRef.current = true;
+    setSending(true);
+    setCaptured(0);
+    setLastError(null);
+    startNewSession(); // fiecare Start = o cursă nouă
+    sender.drain();
+  };
+
   const onRecalibrate = () => {
     if (trackingRef.current) startNewSession();
   };
@@ -269,6 +286,22 @@ function CarScreen() {
           <Text style={styles.brand}>{OWNER.name.toUpperCase()} <Text style={styles.brandModel}>{MODEL}</Text></Text>
           <Text style={styles.vinHeader}>{vin}</Text>
         </Pressable>
+
+        <Pressable
+          onPress={toggleSending}
+          disabled={!tracking}
+          style={({ pressed }) => [styles.sendBtn, sending ? styles.sendBtnStop : styles.sendBtnStart, (pressed || !tracking) && styles.sendBtnDim]}
+        >
+          <Text style={styles.sendBtnText}>{sending ? '■  Oprește trimiterea' : '▶  Pornește trimiterea'}</Text>
+        </Pressable>
+        <Text style={[styles.sendInfo, sending && styles.sendInfoOn]}>
+          {sending
+            ? `● Se trimit date la Azure · capturate ${captured} · în coadă ${pendingHere}`
+            : pendingHere > 0
+              ? `Trimiterea e oprită · ${pendingHere} în coadă se trimit în continuare`
+              : 'Trimiterea e oprită · senzorii merg doar pe ecran'}
+        </Text>
+        {sending && lastError ? <Text style={styles.sendErr}>{lastError}</Text> : null}
 
         <View style={styles.card}>
           {CHANNELS.map(({ key, label }) => {
@@ -399,6 +432,14 @@ const styles = StyleSheet.create({
   brandModel: { color: "#e8eefc", fontSize: 15, fontWeight: "700", letterSpacing: 3 },
   title: { color: '#fff', fontSize: 26, fontWeight: '300', textAlign: 'center', marginTop: 4, marginBottom: 8 },
   vinHeader: { color: '#6b768c', fontSize: 13, textAlign: 'center', marginTop: 4, marginBottom: 8, letterSpacing: 2, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+  sendBtn: { alignSelf: 'center', minWidth: 240, paddingHorizontal: 28, paddingVertical: 13, borderRadius: 26, alignItems: 'center', marginTop: 6 },
+  sendBtnStart: { backgroundColor: '#1e6bff' },
+  sendBtnStop: { backgroundColor: '#c0392b' },
+  sendBtnDim: { opacity: 0.6 },
+  sendBtnText: { color: '#fff', fontSize: 16, fontWeight: '700', letterSpacing: 0.5 },
+  sendInfo: { color: '#6b768c', fontSize: 12, textAlign: 'center', marginTop: 8 },
+  sendInfoOn: { color: '#5ee39a' },
+  sendErr: { color: '#ffb36b', fontSize: 12, textAlign: 'center', marginTop: 4 },
   btnPrimary: { backgroundColor: '#1e6bff', marginTop: 16 },
   card: { backgroundColor: '#0d1119', borderRadius: 14, padding: 14, marginTop: 12, borderWidth: 1, borderColor: '#182033' },
   cardTitle: { color: '#c8d2e6', fontSize: 13, fontWeight: '600', letterSpacing: 1, marginBottom: 8, textTransform: 'uppercase' },
