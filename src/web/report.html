@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Detalii Raport — Porsche Hecaton</title>
+  <title>Verity Drive — Raport Cursă</title>
   <link rel="stylesheet" href="./styles.css" />
   <script type="importmap">
   {
@@ -14,7 +14,7 @@
   }
   </script>
 </head>
-<body class="porsche-bg">
+<body class="verity-bg">
   <header class="topbar">
     <div class="brand">
       <a href="./index.html" class="btn-ghost">← Înapoi la flotă</a>
@@ -23,20 +23,21 @@
         <p id="report-subtitle" class="subtitle">Se încarcă datele...</p>
       </div>
     </div>
-    <div id="report-badge" class="status online">Raport Complet</div>
+    <div id="report-badge" class="status">Se încarcă…</div>
   </header>
 
   <main class="container">
+    <div id="report-error" class="card report-error hidden"></div>
     <!-- SUS STÂNGA: Poza mașinii pe tot panoul | SUS DREAPTA: Valorile colectate -->
     <section class="report-hero-large">
       <div class="card car-showcase-full">
         <img id="car-photo" alt="Fotografie vehicul Porsche" />
         <div class="car-showcase-caption">
           <div>
-            <h2 id="car-model-name">Porsche 911 Turbo S</h2>
-            <p class="muted">Telemetrie: Accelerometru • Magnetometru • Barometru</p>
+            <h2 id="car-model-name">—</h2>
+            <p class="muted" id="car-sensors">Telemetrie: Accelerometru • Magnetometru • Barometru</p>
           </div>
-          <span class="car-overlay-tag" id="car-device-tag">phone-daniela-01</span>
+          <span class="car-overlay-tag" id="car-device-tag">—</span>
         </div>
       </div>
 
@@ -45,33 +46,33 @@
         <div class="values-grid-3">
           <div class="metric">
             <span class="label">Altitudine (Max / Curent)</span>
-            <strong id="val-alt">+38.2 m / +0.0 m</strong>
+            <strong id="val-alt">—</strong>
             <small>Barometru relativ</small>
           </div>
           <div class="metric">
             <span class="label">Orientare (Pitch / Roll / Yaw)</span>
-            <strong id="val-orient">0.0° / 0.0° / 0.0°</strong>
+            <strong id="val-orient">—</strong>
             <small>Fuziune senzori</small>
           </div>
           <div class="metric">
             <span class="label">Distanță &amp; Durată</span>
-            <strong id="val-dist">8.7 km • 24 min</strong>
-            <small>Dead reckoning</small>
+            <strong id="val-dist">—</strong>
+            <small id="val-dist-note">Din sesiunea salvată</small>
           </div>
           <div class="metric">
             <span class="label">Accelerometru (X, Y, Z)</span>
-            <strong id="val-accel">0.02, -0.98, 0.11 g</strong>
-            <small>Accelerație liniară + g</small>
+            <strong id="val-accel">—</strong>
+            <small>Citirea cea mai apropiată de punctul curent</small>
           </div>
           <div class="metric">
             <span class="label">Magnetometru (X, Y, Z)</span>
-            <strong id="val-mag">21.4, -5.2, -40.8 µT</strong>
+            <strong id="val-mag">—</strong>
             <small>Câmp magnetic (Busolă)</small>
           </div>
           <div class="metric">
             <span class="label">Barometru (Presiune)</span>
-            <strong id="val-baro">1012.6 hPa</strong>
-            <small>Min: 1008.5 • Max: 1013.2</small>
+            <strong id="val-baro">—</strong>
+            <small id="val-baro-range">—</small>
           </div>
         </div>
 
@@ -80,7 +81,7 @@
           <table class="reports-table">
             <thead>
               <tr>
-                <th>Timp UTC</th>
+                <th>Ora</th>
                 <th>Accel (g)</th>
                 <th>Mag (µT)</th>
                 <th>Baro (hPa)</th>
@@ -103,10 +104,10 @@
         <div class="map-header">
           <div>
             <h3>Traiectorie 3D &amp; Elevație</h3>
-            <p class="muted">Mașina urcă, coboară și se înclină pe traseu</p>
+            <p class="muted" id="track-note">Traseul înregistrat în baza de date</p>
           </div>
           <div class="playback-controls">
-            <button id="play-pause-btn" class="btn-primary">⏸ Pauză</button>
+            <button id="play-pause-btn" class="btn-primary">▶ Redă</button>
             <input type="range" id="timeline-slider" min="0" max="100" value="0" />
             <span id="live-alt-readout" class="alt-pill">+0.0 m</span>
           </div>

@@ -15,18 +15,15 @@
   padding: 0;
 }
 
-body.porsche-bg {
-  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
-  background-color: var(--bg);
-  color: var(--text);
-  line-height: 1.5;
-  min-height: 100vh;
-  /* Fundal negru cu siluete Porsche bine iluminate pe fond */
+/* Fundal negru Verity Drive cu siluete sportive detaliate și vizibile */
+body.verity-bg {
+  background-color: #05070c;
   background-image:
-    radial-gradient(circle at 18% 22%, rgba(225, 29, 72, 0.22), transparent 46%),
-    radial-gradient(circle at 82% 78%, rgba(56, 189, 248, 0.20), transparent 48%),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='560' height='320' viewBox='0 0 560 320'%3E%3Cg fill='none'%3E%3Cpath d='M0 160 H560 M280 0 V320' stroke='%23ffffff' stroke-opacity='0.07' stroke-dasharray='6 8'/%3E%3Cpath d='M-40 250 Q150 195 300 240 T600 205' stroke='%23e11d48' stroke-opacity='0.32' stroke-width='2.5'/%3E%3Cg transform='translate(65, 70)' stroke='%23ffffff' stroke-opacity='0.28' stroke-width='2.2'%3E%3Cpath d='M20 95 C32 68, 82 52, 132 50 C172 26, 238 24, 288 48 C338 56, 370 72, 376 95 L350 99 A22 22 0 0 1 306 99 L110 99 A22 22 0 0 1 66 99 Z' fill='%23ffffff' fill-opacity='0.05'/%3E%3Cpath d='M140 50 C175 30, 232 28, 272 48 Z' stroke-opacity='0.32'/%3E%3Ccircle cx='88' cy='99' r='16'/%3E%3Ccircle cx='328' cy='99' r='16'/%3E%3Cpath d='M355 76 L372 78' stroke='%23e11d48' stroke-opacity='0.9' stroke-width='4'/%3E%3C/g%3E%3Cg transform='translate(160, 195) scale(0.78)' stroke='%2338bdf8' stroke-opacity='0.26' stroke-width='2.2'%3E%3Cpath d='M20 95 C32 68, 82 52, 132 50 C172 26, 238 24, 288 48 C338 56, 370 72, 376 95 L350 99 A22 22 0 0 1 306 99 L110 99 A22 22 0 0 1 66 99 Z' fill='%2338bdf8' fill-opacity='0.04'/%3E%3Ccircle cx='88' cy='99' r='16'/%3E%3Ccircle cx='328' cy='99' r='16'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
-  background-attachment: fixed;
+    radial-gradient(circle at 50% 0%, rgba(56, 189, 248, 0.08), transparent 65%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='760' height='480' viewBox='0 0 760 480'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3C!-- Silueta Porsche Coupe (stanga-sus) --%3E%3Cg transform='translate(55, 65)' stroke='%2394a3b8' stroke-opacity='0.18' stroke-width='1.7'%3E%3Cpath d='M16 74 h26 a20 20 0 0 1 40 0 h112 a20 20 0 0 1 40 0 h22 c9 0 14 -5 14 -11 c0 -8 -9 -14 -26 -17 l-42 -7 c-18 -19 -44 -30 -76 -30 c-29 0 -53 10 -71 26 l-25 7 c-11 3 -17 9 -17 18 c0 8 6 14 23 14 z'/%3E%3Cpath d='M68 38 c15 -15 36 -22 61 -22 c24 0 44 7 59 22 H68 z' stroke-opacity='0.13'/%3E%3Cpath d='M126 16 v22' stroke-opacity='0.12'/%3E%3Cpath d='M12 48 l-8 -5 h14' stroke='%23e11d48' stroke-opacity='0.32' stroke-width='1.8'/%3E%3Cpath d='M254 53 l12 2' stroke='%2338bdf8' stroke-opacity='0.38' stroke-width='2'/%3E%3Ccircle cx='62' cy='74' r='15'/%3E%3Ccircle cx='62' cy='74' r='7' stroke-opacity='0.12'/%3E%3Ccircle cx='214' cy='74' r='15'/%3E%3Ccircle cx='214' cy='74' r='7' stroke-opacity='0.12'/%3E%3Cpath d='M90 64 h96' stroke-opacity='0.11'/%3E%3C/g%3E%3C!-- Silueta Sportback / Taycan (dreapta-jos, decalata) --%3E%3Cg transform='translate(425, 295)' stroke='%2394a3b8' stroke-opacity='0.18' stroke-width='1.7'%3E%3Cpath d='M16 74 h26 a20 20 0 0 1 40 0 h118 a20 20 0 0 1 40 0 h22 c9 0 14 -5 14 -11 c0 -8 -9 -14 -26 -17 l-40 -6 c-18 -19 -46 -29 -80 -29 c-30 0 -55 9 -73 25 l-27 7 c-11 3 -17 9 -17 18 c0 8 6 14 23 14 z'/%3E%3Cpath d='M66 38 c16 -14 38 -21 65 -21 c26 0 47 7 62 21 H66 z' stroke-opacity='0.13'/%3E%3Cpath d='M132 17 v21' stroke-opacity='0.12'/%3E%3Cpath d='M14 50 h10' stroke='%23e11d48' stroke-opacity='0.35' stroke-width='2'/%3E%3Cpath d='M260 53 l12 2' stroke='%2338bdf8' stroke-opacity='0.38' stroke-width='2'/%3E%3Ccircle cx='62' cy='74' r='15'/%3E%3Ccircle cx='62' cy='74' r='7' stroke-opacity='0.12'/%3E%3Ccircle cx='220' cy='74' r='15'/%3E%3Ccircle cx='220' cy='74' r='7' stroke-opacity='0.12'/%3E%3Cpath d='M92 64 h100' stroke-opacity='0.11'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 760px 480px;
+  color: #f1f5f9;
 }
 
 .topbar {
@@ -438,6 +435,7 @@ body.porsche-bg {
 }
 
 .modal-card input[type="text"],
+.modal-card input[type="number"],
 .modal-card select {
   background: #0b0e14;
   border: 1px solid var(--border);
@@ -729,4 +727,215 @@ body.porsche-bg {
   min-height: 360px !important;
   position: relative;
   display: block;
+}
+
+/* Bară conectare API (Owner ID, VIN, Bearer Token) */
+.api-auth-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-bottom: 1.25rem;
+  padding: 1rem 1.25rem;
+  overflow: hidden;
+}
+
+.api-auth-fields {
+  display: grid;
+  grid-template-columns: 150px minmax(300px, 1.3fr) minmax(250px, 1fr);
+  gap: 1rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.api-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: #94a3b8;
+  min-width: 0;
+}
+
+.api-field input,
+.api-field select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 8px;
+  color: #f1f5f9;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+
+.api-field input:focus,
+.api-field select:focus {
+  outline: none;
+  border-color: #38bdf8;
+}
+
+.vin-combo {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 0.5rem;
+    min-width: 0;
+  }
+
+.vin-combo input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  letter-spacing: 0.03em;
+}
+
+.api-auth-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.api-auth-actions .muted {
+  font-size: 0.8rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.api-auth-actions button {
+  flex-shrink: 0;
+}
+
+@media (max-width: 960px) {
+  .api-auth-fields {
+    grid-template-columns: 1fr;
+  }
+  .vin-combo {
+    grid-template-columns: 1fr;
+  }
+  .api-auth-actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+/* Bară identificare VIN (Verity Drive) */
+.api-auth-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-bottom: 1.25rem;
+  padding: 1rem 1.25rem;
+  overflow: hidden;
+}
+
+.api-auth-fields {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 1rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.api-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: #94a3b8;
+  min-width: 0;
+}
+
+.api-field input,
+.api-field select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 8px;
+  color: #f1f5f9;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+
+.api-field input:focus,
+.api-field select:focus {
+  outline: none;
+  border-color: #38bdf8;
+}
+
+.vin-combo {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.vin-combo input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  letter-spacing: 0.03em;
+}
+
+.api-auth-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.api-hint-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.api-auth-actions .muted {
+  font-size: 0.8rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.api-auth-actions button {
+  flex-shrink: 0;
+}
+
+.car-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.btn-delete-car {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+  border-radius: 8px;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-delete-car:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #ffffff;
+}
+
+@media (max-width: 760px) {
+  .api-auth-fields,
+  .vin-combo {
+    grid-template-columns: 1fr;
+  }
+  .api-auth-actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }

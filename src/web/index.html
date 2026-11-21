@@ -3,68 +3,66 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Porsche Hecaton — Fleet Telemetry 3D</title>
+  <title>Verity Drive — Fleet Telemetry 3D</title>
   <link rel="stylesheet" href="./styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏎️</text></svg>" />
   <script type="importmap">
-{
-  "imports": {
-    "three": "./vendor/three.module.js",
-    "three/": "./vendor/"
+  {
+    "imports": {
+      "three": "./vendor/three.module.js",
+      "three/": "./vendor/"
+    }
   }
-}
-</script>
+  </script>
 </head>
-<body class="porsche-bg">
+<body class="verity-bg">
   <header class="topbar">
     <div class="brand">
-      <span class="brand-badge">HECATON</span>
+      <span class="brand-badge">VERITY</span>
       <div>
-        <h1>Porsche Telemetry Command</h1>
-        <p class="subtitle">Monitorizare 3D în timp real &amp; rapoarte zilnice</p>
+        <h1>Verity Drive</h1>
+        <p class="subtitle">Monitorizare 3D în timp real &amp; rapoarte de cursă din baza de date</p>
       </div>
     </div>
 
     <div class="topbar-actions">
-      <div id="connection-status" class="status online">LIVE • 3D Stream</div>
-      <button id="add-car-btn" class="btn-primary">+ Adaugă Mașină</button>
+      <div id="connection-status" class="status">Neconectat</div>
     </div>
   </header>
 
   <main class="container">
+    <!-- Bară identificare vehicul după Serie Șasiu (VIN) -->
+    <section class="api-auth-bar card">
+      <div class="api-auth-fields">
+        <label class="api-field">
+          <span>Owner ID</span>
+          <input type="text" id="api-owner-input" value="porsche" placeholder="porsche" />
+        </label>
+
+        <label class="api-field api-field-vin">
+          <span>Serie Șasiu / VIN (17 caractere)</span>
+          <div class="vin-combo">
+            <select id="api-vin-select" title="Selectează vehicul din flotă"></select>
+            <input
+              type="text"
+              id="api-vin-input"
+              maxlength="17"
+              placeholder="Filtrează după serie șasiu (detectare automată)..."
+              spellcheck="false"
+            />
+          </div>
+        </label>
+      </div>
+
+      <div class="api-auth-actions">
+      <div class="api-auth-actions">
+        <span id="api-sync-hint" class="muted">Se inițializează conexiunea automată...</span>
+        <button type="button" id="api-connect-btn" class="btn-primary">Oprește Live</button>
+      </div>
+    </section>
+
     <section id="fleet-grid" class="fleet-grid"></section>
   </main>
-
-  <!-- Modal pentru adăugarea unei mașini noi -->
-  <div id="add-car-modal" class="modal hidden">
-    <div class="modal-card">
-      <h2>Adaugă vehicul în flotă</h2>
-      <form id="add-car-form">
-        <label>
-          Nume vehicul
-          <input type="text" id="car-name-input" placeholder="ex. Porsche 911 GT3" required />
-        </label>
-        <label>
-          Device ID (telefon)
-          <input type="text" id="car-device-input" placeholder="ex. phone-daniela-03" required />
-        </label>
-        <label>
-          Model vizual Porsche
-          <select id="car-image-input">
-            <option value="./assets/porsche-silver.png">Porsche 911 Turbo S (Argintiu)</option>
-            <option value="./assets/porsche-red.jpg">Porsche Taycan GTS (Roșu)</option>
-          </select>
-        </label>
-        <label>
-          Culoare traseu 3D
-          <input type="color" id="car-color-input" value="#38bdf8" />
-        </label>
-        <div class="modal-actions">
-          <button type="button" id="cancel-modal-btn" class="btn-ghost">Anulează</button>
-          <button type="submit" class="btn-primary">Salvează mașina</button>
-        </div>
-      </form>
-    </div>
-  </div>
 
   <script src="./config.js"></script>
   <script type="module" src="./app.js"></script>

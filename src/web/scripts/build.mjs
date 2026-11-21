@@ -14,6 +14,8 @@ const publicFiles = [
   "index.html",
   "report.html",
   "app.js",
+  "api.js",
+  "recs.js",
   "report.js",
   "scene3d.js",
   "styles.css",
@@ -27,6 +29,13 @@ async function build() {
 
   for (const file of publicFiles) {
     await copyFile(path.join(rootDir, file), path.join(distDir, file));
+  }
+
+  // config.js (local, ignorat de git) dacă există; altfel config.example.js devine config.js
+  try {
+    await copyFile(path.join(rootDir, "config.js"), path.join(distDir, "config.js"));
+  } catch (_) {
+    await copyFile(path.join(rootDir, "config.example.js"), path.join(distDir, "config.js"));
   }
 
   try {
