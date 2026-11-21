@@ -16,6 +16,7 @@ const publicFiles = [
   "app.js",
   "report.js",
   "styles.css",
+   "recommendations.js",
   "config.example.js"
 ];
 
