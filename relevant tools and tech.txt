@@ -1,0 +1,26 @@
+Cloud & Infrastructure (Azure)
+-Microsoft Azure - Cloud platform hosting the backend compute, database, and storage infrastructure inside resource group rg-teamverity-eu
+-Azure Functions (Node.js): Serverless compute hosting the REST API (teamverity-api-adina01utcn) for telemetry and session queries.
+-Azure SQL Database & Azure SQL Server
+-Azure Storage Account: Backing storage for the Azure Functions runtime and internal state management.
+-Microsoft Entra ID (Azure AD) & Managed Identity: Passwordless authentication and role-based access control between the Function App, Azure Storage, and Azure SQL Server.
+-Azure Bicep (infrastructure/main.bicep): Infrastructure-as-Code (IaC) templates for declarative, repeatable provisioning of Azure resources
+
+Backend & Security
+-Node.js & JavaScript: Core runtime and implementation language for the serverless API endpoints (telemetry, devices, sessions, health).
+-mssql (Node.js SQL Driver): Database client
+-SHA-256 Token Hashing & Bearer Authentication (DEMO_TENANTS_JSON): Multi-tenant authentication mechanism verifying hashed secret tokens scoped to specific ownerId and ISO 3779 VINs.
+-CORS (Cross-Origin Resource Sharing): Configured on the Azure Function App to securely allow browser requests from the web dashboard.
+
+Mobile Telemetry Client (src/phone-app)
+-React Native & Expo 
+-Expo Sensors, Location, Crypto & Secure Store: Hardware sensor capture, local offline queuing, retry logic, and secure storage of the API token and VIN.
+
+Web Dashboard (src/web)
+-HTML5, CSS3 & Vanilla JavaScript 
+
+DevOps, CI/CD & Developer Tooling
+-Git & GitHub
+-GitHub Actions (.github/workflows): Automated CI/CD pipelines for building, validating, and deploying infrastructure and application code.
+-Azure CLI (az) & Azure Functions Core Tools (func): Command-line tools for deploying Function App code, configuring App Settings, and managing CORS rules.
+-Visual Studio Code: Primary IDE used across infrastructure, backend, mobile, and web development.

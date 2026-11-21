@@ -69,7 +69,7 @@ function CarScreen() {
   const [diagOpen, setDiagOpen] = useState(false);
 
   // ---------- referințe (evită valori vechi în callback-uri) ----------
-  const latest = useRef({ acceleration: null, magneticField: null, pressure: null });
+  const latest = useRef({ acceleration: null, magneticField: null, pressure: null, location: null });
   const pressureSamples = useRef([]);
   const baselineRef = useRef(null);
   const sessionRef = useRef(null);
@@ -184,7 +184,7 @@ function CarScreen() {
     trackingRef.current = true;
     setTracking(true);
     setCaptured(0);
-    latest.current = { acceleration: null, magneticField: null, pressure: null };
+    latest.current = { acceleration: null, magneticField: null, pressure: null, location: null };
     startNewSession();
     stopSensorsRef.current = startSensors(statusRef.current, onReading);
     captureTimer.current = setInterval(capture, CAPTURE_INTERVAL_MS);

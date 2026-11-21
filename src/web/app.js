@@ -504,7 +504,9 @@ function thumbFor(car, imgEl) {
 }
 
 function renderFleet() {
-  disposeScenes();
+  disposeScenes();                       // <-- NOU (prima linie)
+  // scenele se recreează: la următorul poll reîncărcăm traseul real
+  Object.values(liveApi).forEach((l) => (l.loaded = false));
   const grid = document.getElementById("fleet-grid");
   grid.innerHTML = "";
 

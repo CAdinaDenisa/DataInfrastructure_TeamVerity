@@ -3,6 +3,10 @@ import { OrbitControls } from "./vendor/OrbitControls.js";
 
 const ALT_SCALE = 2;   // exagerează altitudinea (la fel ca în varianta 2D)
 const CAR_SCALE = 7;   // mărimea mașinii față de scenă
+const FIT_HALF_SCENE = 180; // un traseu mic e mărit până ocupă ~±180 unități (grila are ±280)
+const MIN_FIT_HALF_M = 4;   // nu mărim mai mult de atât: ±4 m umple scena (jitter-ul GPS rămâne mic)
+const MAX_ZOOM = FIT_HALF_SCENE / MIN_FIT_HALF_M;
+const MIN_POINT_GAP_M = 0.3; // puncte mai apropiate de atât nu se mai adaugă
 
 // date: x, y = planul solului, z = altitudine  ->  three: X, Y(sus), Z
 const toScene = (p) => new THREE.Vector3(p.x, (p.z || 0) * ALT_SCALE, p.y);
@@ -376,6 +380,7 @@ class CarScene {
     this.maxPoints = o.maxPoints || Infinity;
     this.trailColor = new THREE.Color(o.trailColor || "#38bdf8");
     this.pts = [];
+    this._fit = { k: 1, cx: 0, cy: 0 };
     this._counter = 0;
     this._hist = [];
     this._target = new THREE.Vector3();
@@ -497,19 +502,32 @@ class CarScene {
 
   setPath(points) {
     this.pts = points.map((p, i) => ({ x: p.x, y: p.y, z: p.z, rough: p.rough || 0, n: i }));
+    this._counter = this.pts.length;
+    this._updateFit();
     this._rebuild();
   }
 
   pushPoint(p) {
     const last = this.pts[this.pts.length - 1];
-    if (last && Math.hypot(p.x - last.x, p.y - last.y, p.z - last.z) < 1.5) return;
+    // prag mic (30 cm), ca și o plimbare de câțiva metri să lase urmă
+    if (last && Math.hypot(p.x - last.x, p.y - last.y, (p.z || 0) - (last.z || 0)) < MIN_POINT_GAP_M) return;
     this.pts.push({ x: p.x, y: p.y, z: p.z, rough: p.rough || 0, n: this._counter++ });
     if (this.pts.length > this.maxPoints) this.pts.shift();
+    this._updateFit();
     this._dirty = true;
   }
 
+  /** Golește traseul (de ex. la o cursă nouă). */
+  clear() {
+    this.pts = [];
+    this._hist = [];
+    this._placed = false;
+    this._fit = { k: 1, cx: 0, cy: 0 };
+    this._rebuild();
+  }
+
   setCar(p) {
-    const v = toScene(p);
+    const v = toScene(this._fitPoint(p));
     this._hist.push(v);
     if (this._hist.length > 8) this._hist.shift();
     this._place(v, v.clone().sub(this._hist[0]), p);
@@ -519,9 +537,9 @@ class CarScene {
     const n = this.pts.length;
     if (!n) return;
     i = Math.max(0, Math.min(n - 1, i));
-    const a = toScene(this.pts[Math.max(0, i - 3)]);
-    const b = toScene(this.pts[Math.min(n - 1, i + 3)]);
-    this._place(toScene(this.pts[i]), b.sub(a), this.pts[i]);
+    const a = toScene(this._fitPoint(this.pts[Math.max(0, i - 3)]));
+    const b = toScene(this._fitPoint(this.pts[Math.min(n - 1, i + 3)]));
+    this._place(toScene(this._fitPoint(this.pts[i])), b.sub(a), this.pts[i]);
     if (snap) {
       this.car.position.copy(this._target);
       this.car.quaternion.copy(this._targetQ);
@@ -589,10 +607,45 @@ class CarScene {
       set(this.poles, new THREE.BufferGeometry());
       return;
     }
-    const curve = new THREE.CatmullRomCurve3(pts.map(toScene), false, "centripetal");
+    const fitted = pts.map((p) => this._fitPoint(p));
+    const curve = new THREE.CatmullRomCurve3(fitted.map(toScene), false, "centripetal");
     set(this.tube, new THREE.TubeGeometry(curve, Math.min(pts.length * 3, 1500), 1.1, 6, false));
-    set(this.ribbon, buildRibbon(pts));
-    set(this.poles, buildPoles(pts));
+    set(this.ribbon, buildRibbon(fitted));
+    set(this.poles, buildPoles(fitted));
+  }
+
+  /**
+   * Scara automată: scena e gândită pentru trasee de sute de metri (grila are 560 de unități).
+   * Un traseu de câțiva metri ar fi un punct în mijlocul ei, așa că îl mărim (și îl centrăm)
+   * până umple scena. Traseele mari rămân la scara 1:1, ca înainte.
+   */
+  _updateFit() {
+    if (!this.pts.length) {
+      this._fit = { k: 1, cx: 0, cy: 0 };
+      return;
+    }
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of this.pts) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const half = Math.max(maxX - minX, maxY - minY, 2 * MIN_FIT_HALF_M) / 2;
+    const k = Math.min(MAX_ZOOM, Math.max(1, FIT_HALF_SCENE / half));
+    this._fit = k > 1 ? { k, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 } : { k: 1, cx: 0, cy: 0 };
+  }
+
+  /** Punct în metri -> punct scalat pentru scenă (altitudinea rămâne în metri, cu ALT_SCALE). */
+  _fitPoint(p) {
+    const { k, cx, cy } = this._fit;
+    if (k === 1 && cx === 0 && cy === 0) return p;
+    return { ...p, x: (p.x - cx) * k, y: (p.y - cy) * k };
+  }
+
+  /** Metri reali per unitate de scenă (pentru afișarea scării). */
+  get metersPerUnit() {
+    return 1 / this._fit.k;
   }
 
   _tick = (now) => {
