@@ -1,57 +1,56 @@
 'use strict';
 const { app } = require('@azure/functions');
-const { getStore } = require('../storage');
+const { endpoint, HttpError, intParam, timeParam } = require('../lib/http');
+const { requireDevice } = require('../lib/access');
 
 const SENSOR_TYPES = ['accelerometer', 'magnetometer', 'barometer', 'gps'];
 
-function parseQuery(request) {
-  const q = request.query;
-  const limit = Math.min(Math.max(parseInt(q.get('limit') || '1000', 10) || 1000, 1), 5000);
-  const from = q.get('from') || undefined;
-  const to = q.get('to') || undefined;
-  for (const t of [from, to]) if (t && Number.isNaN(Date.parse(t))) throw new Error(`timestamp invalid: ${t}`);
-  return { sessionId: q.get('sessionId') || undefined, from, to, limit };
-}
-
-const wrap = (fn) => async (request, context) => {
-  try {
-    return await fn(request, context);
-  } catch (err) {
-    if (err.message.startsWith('timestamp invalid')) return { status: 400, jsonBody: { error: err.message } };
-    context.error(err);
-    return { status: 503, jsonBody: { error: 'Stocare indisponibilă.' } };
-  }
-};
-
-// GET /api/devices?ownerId=...  - lista mașinilor (pentru dashboard)
-app.http('listDevices', {
-  methods: ['GET'], authLevel: 'anonymous', route: 'devices',
-  handler: wrap(async (request) => ({ jsonBody: await getStore().listDevices(request.query.get('ownerId') || undefined) })),
+const rangeQuery = (request) => ({
+  sessionId: request.query.get('sessionId') || undefined,
+  from: timeParam(request, 'from'),
+  to: timeParam(request, 'to'),
+  limit: intParam(request, 'limit', 1000, 1, 5000),
 });
 
-// GET /api/devices/{deviceId}/state  - ultima orientare + poziție (scena 3D, polling 1 s)
+// GET /api/devices?ownerId=...  - telefoanele firmei (cu token: doar ale firmei tale)
+app.http('listDevices', {
+  methods: ['GET'], authLevel: 'anonymous', route: 'devices',
+  handler: endpoint('listDevices', async ({ request, principal, store }) => {
+    let ownerId = request.query.get('ownerId') || undefined;
+    if (!principal.all) {
+      if (ownerId && ownerId !== principal.ownerId) throw new HttpError(403, 'Tokenul nu are acces la această firmă.');
+      ownerId = principal.ownerId;
+    }
+    return { jsonBody: await store.listDevices(ownerId) };
+  }),
+});
+
+// GET /api/devices/{deviceId}/state  - ultima orientare + poziție (scena 3D)
 app.http('latestState', {
   methods: ['GET'], authLevel: 'anonymous', route: 'devices/{deviceId}/state',
-  handler: wrap(async (request) => {
-    const state = await getStore().getLatestState(request.params.deviceId);
+  handler: endpoint('latestState', async ({ request, principal, store }) => {
+    await requireDevice(store, principal, request.params.deviceId);
+    const state = await store.getLatestState(request.params.deviceId);
     return state ? { jsonBody: state } : { status: 404, jsonBody: { error: 'Nicio stare pentru acest device.' } };
   }),
 });
 
-// GET /api/devices/{deviceId}/states?sessionId=&from=&to=&limit=  - traseul 3D
+// GET /api/devices/{deviceId}/states?sessionId=&from=&to=&limit=  - istoricul stărilor procesate
 app.http('stateHistory', {
   methods: ['GET'], authLevel: 'anonymous', route: 'devices/{deviceId}/states',
-  handler: wrap(async (request) => ({ jsonBody: await getStore().getStates(request.params.deviceId, parseQuery(request)) })),
+  handler: endpoint('stateHistory', async ({ request, principal, store }) => {
+    await requireDevice(store, principal, request.params.deviceId);
+    return { jsonBody: await store.getStates(request.params.deviceId, rangeQuery(request)) };
+  }),
 });
 
-// GET /api/devices/{deviceId}/readings?type=accelerometer&from=&to=&limit=  - graficele
+// GET /api/devices/{deviceId}/readings?type=accelerometer&from=&to=&limit=  - citirile brute (grafice)
 app.http('readings', {
   methods: ['GET'], authLevel: 'anonymous', route: 'devices/{deviceId}/readings',
-  handler: wrap(async (request) => {
+  handler: endpoint('readings', async ({ request, principal, store }) => {
     const type = request.query.get('type') || undefined;
-    if (type && !SENSOR_TYPES.includes(type)) {
-      return { status: 400, jsonBody: { error: `type trebuie să fie unul din: ${SENSOR_TYPES.join(', ')}` } };
-    }
-    return { jsonBody: await getStore().getReadings(request.params.deviceId, { ...parseQuery(request), type }) };
+    if (type && !SENSOR_TYPES.includes(type)) throw new HttpError(400, `type trebuie să fie unul din: ${SENSOR_TYPES.join(', ')}`);
+    await requireDevice(store, principal, request.params.deviceId);
+    return { jsonBody: await store.getReadings(request.params.deviceId, { ...rangeQuery(request), type }) };
   }),
 });

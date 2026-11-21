@@ -1,26 +1,18 @@
 'use strict';
 /**
  * Stocare în SQL Server / Azure SQL Database prin pachetul `mssql`.
- * Local și în Azure codul e identic, se schimbă doar SQL_CONNECTION_STRING.
+ * Local (SQL_CONNECTION_STRING, user/parolă) și în Azure (SQL_SERVER + Managed Identity) codul e identic;
+ * se schimbă doar configurația primită (vezi config.getSqlConfig).
  */
 const sql = require('mssql');
 
 const iso = (d) => (d instanceof Date ? d.toISOString() : d);
 
-function createSqlStore(connectionString) {
+function createSqlStore(sqlConfig) {
   let poolPromise;
   const pool = () => {
     if (!poolPromise) {
-      const isManagedIdentity = /azure-active-directory-default/i.test(connectionString);
-      const poolConfig = isManagedIdentity
-        ? {
-            server: process.env.SQL_SERVER || 'teamverity-sql-cqnazavdlt5aw.database.windows.net',
-            database: process.env.SQL_DATABASE || 'telemetrydb',
-            authentication: { type: 'azure-active-directory-default' },
-            options: { encrypt: true, trustServerCertificate: false },
-          }
-        : connectionString;
-      poolPromise = new sql.ConnectionPool(poolConfig).connect().catch((err) => {
+      poolPromise = new sql.ConnectionPool(sqlConfig).connect().catch((err) => {
         poolPromise = undefined; // reîncearcă la următoarea cerere (ex. Azure SQL serverless se trezește din pauză)
         throw err;
       });
@@ -31,16 +23,62 @@ function createSqlStore(connectionString) {
   return {
     mode: 'sql',
 
+    async ping() {
+      await (await pool()).request().query('SELECT 1 AS ok');
+      return true;
+    },
+
+    async getDevice(deviceId) {
+      const r = await (await pool()).request().input('id', sql.NVarChar(64), deviceId)
+        .query('SELECT device_id, owner_id FROM dbo.devices WHERE device_id = @id');
+      const d = r.recordset[0];
+      return d ? { deviceId: d.device_id, ownerId: d.owner_id } : null;
+    },
+
+    async listTelemetry({ ownerId, vehicleId, sessionId, from, to, limit = 100 }) {
+      const r = await (await pool()).request()
+        .input('owner', sql.NVarChar(128), ownerId)
+        .input('vehicle', sql.NVarChar(64), vehicleId)
+        .input('session_id', sql.NVarChar(64), sessionId ?? null)
+        .input('from', sql.DateTime2(3), from ? new Date(from) : null)
+        .input('to', sql.DateTime2(3), to ? new Date(to) : null)
+        .input('limit', sql.Int, limit)
+        .query(`SELECT TOP (@limit) b.batch_id AS b_batch_id, b.device_id AS b_device_id, b.session_id AS b_session_id,
+                       b.owner_id AS b_owner_id, b.vehicle_id AS b_vehicle_id, b.captured_at AS b_captured_at,
+                       b.received_at AS b_received_at, b.payload_json AS b_payload_json, s.*
+                FROM dbo.batches b
+                LEFT JOIN dbo.device_states s ON s.batch_id = b.batch_id
+                WHERE b.owner_id = @owner AND b.vehicle_id = @vehicle
+                  AND (@session_id IS NULL OR b.session_id = @session_id)
+                  AND (@from IS NULL OR b.captured_at >= @from) AND (@to IS NULL OR b.captured_at <= @to)
+                ORDER BY b.captured_at DESC, b.batch_id DESC`);
+      return r.recordset.map((row) => ({
+        batchId: row.b_batch_id, deviceId: row.b_device_id, sessionId: row.b_session_id,
+        ownerId: row.b_owner_id, vehicleId: row.b_vehicle_id,
+        capturedAt: iso(row.b_captured_at), receivedAt: iso(row.b_received_at),
+        payload: row.b_payload_json ? JSON.parse(row.b_payload_json) : null,
+        state: row.state_id == null ? null : rowToState(row),
+      }));
+    },
+
     async getSession(sessionId) {
-      const r = await (await pool()).request().input('id', sql.NVarChar(64), sessionId).query(
-        `SELECT session_id, device_id, vehicle_id, started_at, ref_pressure_hpa, origin_lat, origin_lon, origin_alt_m
-         FROM dbo.sessions WHERE session_id = @id`);
-      const row = r.recordset[0];
-      if (!row) return null;
-      return {
-        sessionId: row.session_id, deviceId: row.device_id, vehicleId: row.vehicle_id, startedAt: iso(row.started_at),
-        refPressureHpa: row.ref_pressure_hpa, originLat: row.origin_lat, originLon: row.origin_lon, originAltM: row.origin_alt_m,
-      };
+      const r = await (await pool()).request().input('id', sql.NVarChar(64), sessionId)
+        .query('SELECT * FROM dbo.sessions WHERE session_id = @id');
+      return r.recordset[0] ? rowToSession(r.recordset[0]) : null;
+    },
+
+    async listSessions(deviceId, limit = 20) {
+      const r = await (await pool()).request()
+        .input('device_id', sql.NVarChar(64), deviceId).input('limit', sql.Int, limit)
+        .query('SELECT TOP (@limit) * FROM dbo.sessions WHERE device_id = @device_id ORDER BY started_at DESC');
+      return r.recordset.map(rowToSession);
+    },
+
+    async getSessionStates(sessionId, maxRows = 20000) {
+      const r = await (await pool()).request()
+        .input('session_id', sql.NVarChar(64), sessionId).input('limit', sql.Int, maxRows)
+        .query('SELECT TOP (@limit) * FROM dbo.device_states WHERE session_id = @session_id ORDER BY ts ASC');
+      return r.recordset.map(rowToState);
     },
 
     async saveBatch(batch, state, sessionUpdate) {
@@ -83,6 +121,16 @@ function createSqlStore(connectionString) {
           .input('lat', sql.Float, sessionUpdate.originLat ?? null)
           .input('lon', sql.Float, sessionUpdate.originLon ?? null)
           .input('alt', sql.Float, sessionUpdate.originAltM ?? null)
+          .input('dist', sql.Float, sessionUpdate.distanceM ?? 0)
+          .input('ax', sql.Float, sessionUpdate.anchorX ?? null)
+          .input('ay', sql.Float, sessionUpdate.anchorY ?? null)
+          .input('ats', sql.DateTime2(3), sessionUpdate.anchorTs ? new Date(sessionUpdate.anchorTs) : null)
+          .input('maxalt', sql.Float, sessionUpdate.maxAltRelM ?? null)
+          .input('minalt', sql.Float, sessionUpdate.minAltRelM ?? null)
+          .input('maxspd', sql.Float, sessionUpdate.maxSpeedMps ?? null)
+          .input('rough', sql.Int, sessionUpdate.roughCount ?? 0)
+          .input('harsh', sql.Int, sessionUpdate.harshCount ?? 0)
+          .input('nb', sql.Int, sessionUpdate.batchCount ?? 0)
           .query(`
             MERGE dbo.sessions WITH (HOLDLOCK) AS t
             USING (SELECT @session_id AS session_id) AS s ON t.session_id = s.session_id
@@ -90,10 +138,16 @@ function createSqlStore(connectionString) {
               last_event_at = CASE WHEN @last > t.last_event_at THEN @last ELSE t.last_event_at END,
               ref_pressure_hpa = COALESCE(t.ref_pressure_hpa, @p0),
               origin_lat = COALESCE(t.origin_lat, @lat), origin_lon = COALESCE(t.origin_lon, @lon),
-              origin_alt_m = COALESCE(t.origin_alt_m, @alt), vehicle_id = COALESCE(t.vehicle_id, @vehicle_id)
+              origin_alt_m = COALESCE(t.origin_alt_m, @alt), vehicle_id = COALESCE(t.vehicle_id, @vehicle_id),
+              started_at = CASE WHEN @first < t.started_at THEN @first ELSE t.started_at END,
+              distance_m = @dist, anchor_x_m = @ax, anchor_y_m = @ay, anchor_ts = @ats,
+              max_alt_rel_m = @maxalt, min_alt_rel_m = @minalt, max_speed_mps = @maxspd,
+              rough_count = @rough, harsh_count = @harsh, batch_count = @nb
             WHEN NOT MATCHED THEN INSERT
-              (session_id, device_id, vehicle_id, started_at, last_event_at, ref_pressure_hpa, origin_lat, origin_lon, origin_alt_m)
-              VALUES (@session_id, @device_id, @vehicle_id, @first, @last, @p0, @lat, @lon, @alt);`);
+              (session_id, device_id, vehicle_id, started_at, last_event_at, ref_pressure_hpa, origin_lat, origin_lon, origin_alt_m,
+               distance_m, anchor_x_m, anchor_y_m, anchor_ts, max_alt_rel_m, min_alt_rel_m, max_speed_mps, rough_count, harsh_count, batch_count)
+              VALUES (@session_id, @device_id, @vehicle_id, @first, @last, @p0, @lat, @lon, @alt,
+               @dist, @ax, @ay, @ats, @maxalt, @minalt, @maxspd, @rough, @harsh, @nb);`);
 
         try {
           await req()
@@ -103,12 +157,20 @@ function createSqlStore(connectionString) {
             .input('v', sql.VarChar(16), batch.sourceFormat || 'batch-1.0')
             .input('sent_at', sql.DateTime2(3), new Date(batch.sentAt))
             .input('n', sql.Int, batch.events.length)
-            .query(`INSERT INTO dbo.batches (batch_id, device_id, session_id, source_format, sent_at, event_count)
-                    VALUES (@batch_id, @device_id, @session_id, @v, @sent_at, @n)`);
+            .input('owner', sql.NVarChar(128), batch.ownerId ?? null)
+            .input('vehicle', sql.NVarChar(64), batch.vehicleId ?? null)
+            .input('captured', sql.DateTime2(3), last)
+            .input('hash', sql.Char(64), batch.payloadHash ?? null)
+            .input('payload', sql.NVarChar(sql.MAX), batch.payloadJson ?? null)
+            .query(`INSERT INTO dbo.batches (batch_id, device_id, session_id, source_format, sent_at, event_count,
+                      owner_id, vehicle_id, captured_at, payload_hash, payload_json)
+                    VALUES (@batch_id, @device_id, @session_id, @v, @sent_at, @n, @owner, @vehicle, @captured, @hash, @payload)`);
         } catch (err) {
           if (err.number === 2627 || err.number === 2601) { // cheie duplicată = lot retrimis
             await tx.rollback();
-            return { duplicate: true };
+            const ex = await p.request().input('id', sql.NVarChar(64), batch.batchId)
+              .query('SELECT payload_hash FROM dbo.batches WHERE batch_id = @id');
+            return { duplicate: true, existingHash: ex.recordset[0]?.payload_hash ?? null };
           }
           throw err;
         }
@@ -140,7 +202,8 @@ function createSqlStore(connectionString) {
             gps ? v.speed ?? null : null, gps ? v.heading ?? null : null,
           );
         }
-        await req().bulk(t);
+        // checkConstraints: aplicația are doar SELECT/INSERT/UPDATE (fără ALTER TABLE), vezi grants/
+        await req().bulk(t, { checkConstraints: true });
 
         const o = state.orientation || {};
         await req()
@@ -155,11 +218,12 @@ function createSqlStore(connectionString) {
           .input('lat', sql.Float, state.gps?.latitude ?? null).input('lon', sql.Float, state.gps?.longitude ?? null)
           .input('acc', sql.Float, state.gps?.accuracy ?? null).input('speed', sql.Float, state.gps?.speed ?? null)
           .input('advice', sql.NVarChar(200), state.advice)
+          .input('dist', sql.Float, state.distanceM ?? null)
           .query(`INSERT INTO dbo.device_states
             (device_id, session_id, batch_id, ts, pitch_deg, roll_deg, yaw_deg, alt_rel_m, alt_source,
-             pos_x_m, pos_y_m, pos_z_m, pos_source, latitude, longitude, gps_accuracy_m, speed_mps, advice)
+             pos_x_m, pos_y_m, pos_z_m, pos_source, latitude, longitude, gps_accuracy_m, speed_mps, advice, distance_m)
             VALUES (@device_id, @session_id, @batch_id, @ts, @pitch, @roll, @yaw, @alt, @alt_src,
-             @x, @y, @z, @pos_src, @lat, @lon, @acc, @speed, @advice)`);
+             @x, @y, @z, @pos_src, @lat, @lon, @acc, @speed, @advice, @dist)`);
 
         await tx.commit();
         return { duplicate: false };
@@ -221,14 +285,30 @@ async function queryStates(p, deviceId, q) {
               WHERE device_id = @device_id AND (@session_id IS NULL OR session_id = @session_id)
                 AND (@from IS NULL OR ts >= @from) AND (@to IS NULL OR ts <= @to)
               ORDER BY ts DESC) s ORDER BY ts ASC`);
-  return r.recordset.map((s) => ({
+  return r.recordset.map(rowToState);
+}
+
+function rowToState(s) {
+  return {
     deviceId: s.device_id, sessionId: s.session_id, batchId: s.batch_id, timestamp: iso(s.ts),
     orientation: s.pitch_deg == null ? null : { pitch: s.pitch_deg, roll: s.roll_deg, yaw: s.yaw_deg, unit: 'deg' },
     altitudeRel: { value: s.alt_rel_m, unit: 'm', source: s.alt_source },
     position: { x: s.pos_x_m, y: s.pos_y_m, z: s.pos_z_m, unit: 'm', source: s.pos_source, estimated: s.pos_source !== 'gps+barometer' },
     gps: s.latitude == null ? null : { latitude: s.latitude, longitude: s.longitude, accuracy: s.gps_accuracy_m, speed: s.speed_mps },
     advice: s.advice,
-  }));
+    distanceM: s.distance_m ?? null,
+  };
+}
+
+function rowToSession(row) {
+  return {
+    sessionId: row.session_id, deviceId: row.device_id, vehicleId: row.vehicle_id,
+    startedAt: iso(row.started_at), lastEventAt: iso(row.last_event_at),
+    refPressureHpa: row.ref_pressure_hpa, originLat: row.origin_lat, originLon: row.origin_lon, originAltM: row.origin_alt_m,
+    distanceM: row.distance_m, anchorX: row.anchor_x_m, anchorY: row.anchor_y_m, anchorTs: row.anchor_ts ? iso(row.anchor_ts) : null,
+    maxAltRelM: row.max_alt_rel_m, minAltRelM: row.min_alt_rel_m, maxSpeedMps: row.max_speed_mps,
+    roughCount: row.rough_count, harshCount: row.harsh_count, batchCount: row.batch_count,
+  };
 }
 
 function rowToEvent(r) {

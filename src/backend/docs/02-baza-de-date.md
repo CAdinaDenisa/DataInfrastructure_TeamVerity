@@ -1,6 +1,6 @@
 # Baza de date (Azure SQL Database / SQL Server)
 
-Script: [`database/migrations/001_init.sql`](../database/migrations/001_init.sql). Se aplică cu `npm run db:migrate` (din `src/backend/api`) (ține evidența în tabela `schema_migrations`, deci poate fi rulat de oricâte ori). Schimbările viitoare = fișiere noi `002_...sql`, niciodată editarea lui `001`.
+Scripturi: [`database/migrations/`](../database/migrations) (`001_init`, `002_session_stats`, `003_auth_and_payloads`). Se aplică cu `npm run db:migrate` (din `src/backend/api`) (ține evidența în tabela `schema_migrations`, deci poate fi rulat de oricâte ori). Schimbările viitoare = fișiere noi `002_...sql`, niciodată editarea lui `001`.
 
 Același script rulează pe SQL Server 2022 local (Docker) și pe Azure SQL Database: e același motor T-SQL.
 
@@ -14,10 +14,10 @@ devices 1 ── * sessions 1 ── * batches 1 ── * sensor_readings
 | Tabelă | Un rând = | Coloane importante |
 |---|---|---|
 | `devices` | un telefon (o mașină pe dashboard) | `device_id` (PK), `owner_id`, `platform`, `model`, `has_accelerometer/magnetometer/barometer/gps`, `last_seen_at` |
-| `sessions` | o înregistrare Start -> Stop | `session_id` (PK), `device_id`, `vehicle_id`, `started_at`, `ref_pressure_hpa` (p0), `origin_lat/lon/alt_m` (originea x/y/z) |
-| `batches` | un lot / eveniment primit | `batch_id` (PK = **idempotență la retry**; pentru aplicația actuală = `eventId`), `source_format` (`batch-1.0` sau `event-1`), `sent_at`, `received_at`, `event_count` |
+| `sessions` | o înregistrare Start -> Stop | `session_id` (PK), `device_id`, `vehicle_id`, `started_at`, `last_event_at`, `ref_pressure_hpa` (p0), `origin_lat/lon/alt_m` (originea x/y/z). Din migrarea 002: `distance_m`, `max/min_alt_rel_m`, `max_speed_mps`, `rough_count`, `harsh_count`, `batch_count` (vezi 05-rapoarte-sesiuni.md) |
+| `batches` | un lot / eveniment primit | `batch_id` (PK = **idempotență la retry**; pentru aplicația actuală = `eventId`), `source_format` (`batch-1.0` sau `event-1`), `sent_at`, `received_at`, `event_count`. Din 003: `owner_id`, `vehicle_id`, `captured_at`, `payload_hash` (pentru 409), `payload_json` (evenimentul original) |
 | `sensor_readings` | o citire brută | `event_type`, `ts`, `x/y/z` (accel g, mag uT), `pressure_hpa`, `latitude/longitude/altitude_m/accuracy_m/speed_mps/heading_deg` |
-| `device_states` | starea procesată per lot | `pitch_deg/roll_deg/yaw_deg`, `alt_rel_m` + `alt_source`, `pos_x_m/pos_y_m/pos_z_m` + `pos_source`, `advice` |
+| `device_states` | starea procesată per lot | `pitch_deg/roll_deg/yaw_deg`, `alt_rel_m` + `alt_source`, `pos_x_m/pos_y_m/pos_z_m` + `pos_source`, `advice`, `distance_m` (distanța de la start, din 002) |
 
 ## De ce așa
 
