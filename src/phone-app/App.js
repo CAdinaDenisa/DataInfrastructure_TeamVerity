@@ -287,6 +287,28 @@ function CarScreen() {
           <Text style={styles.vinHeader}>{vin}</Text>
         </Pressable>
 
+        {!sending ? (
+          <View style={styles.tokenMain}>
+            <Text style={styles.inputLabel}>Cheie server (token) – se pune înainte de Pornește</Text>
+            <View style={styles.tokenRow}>
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                value={token}
+                onChangeText={(t) => setToken(t.trim())}
+                secureTextEntry={!showToken}
+                autoCapitalize="none"
+                autoCorrect={false}
+                placeholder="lipește aici cheia"
+                placeholderTextColor="#55607a"
+              />
+              <Pressable onPress={() => setShowToken((v) => !v)} style={styles.eye}>
+                <Text style={styles.eyeText}>{showToken ? 'Ascunde' : 'Arată'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : (
+          <Text style={styles.tokenSet}>{token ? '🔑 cheie setată' : '🔑 fără cheie'}</Text>
+        )}
         <Pressable
           onPress={toggleSending}
           disabled={!tracking}
@@ -459,6 +481,8 @@ const styles = StyleSheet.create({
   closeBtn: { backgroundColor: '#1a2233', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8 },
   inputLabel: { color: '#7f8aa3', fontSize: 12, marginTop: 12, marginBottom: 4 },
   input: { backgroundColor: '#070a10', color: '#fff', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: '#1d2638', fontSize: 15 },
+  tokenMain: { marginTop: 4, marginBottom: 6 },
+  tokenSet: { color: '#6b768c', fontSize: 12, textAlign: 'center', marginBottom: 2 },
   tokenRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   eye: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, backgroundColor: '#1a2233' },
   eyeText: { color: '#c8d2e6', fontSize: 13, fontWeight: '600' },
