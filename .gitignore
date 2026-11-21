@@ -1,6 +1,11 @@
-node_modules/
-local.settings.json
-.env
-.expo/
-dist/
-build/.DS_Store
+**/node_modules/
+**/.expo/
+**/.env
+**/.env.local
+**/local.settings.json
+**/private.parameters.json
+**/dist/
+**/build/
+**/coverage/
+**/.local-data/
+infrastructure/main.json
