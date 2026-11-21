@@ -1,1 +1,6 @@
-.DS_Store
+node_modules/
+local.settings.json
+.env
+.expo/
+dist/
+build/.DS_Store
