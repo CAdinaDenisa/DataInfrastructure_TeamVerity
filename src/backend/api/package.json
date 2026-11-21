@@ -5,13 +5,17 @@
   "main": "src/functions/*.js",
   "scripts": {
     "start": "func start",
-    "test": "node --test",
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:sql": "node scripts/test-sql.js",
+    "check": "node scripts/check.js",
+    "ci": "npm run check && npm test",
     "db:up": "docker compose -f ../database/docker-compose.yml up -d",
     "db:down": "docker compose -f ../database/docker-compose.yml down",
     "db:migrate": "node scripts/migrate.js",
+    "api:docker": "docker compose -f ../database/docker-compose.yml --profile api up -d",
     "simulate": "node scripts/simulate.js",
-    "setup:local": "node -e \"require('fs').copyFileSync('local.settings.example.json','local.settings.json',require('fs').constants.COPYFILE_EXCL)\"",
-    "api:docker": "docker compose -f ../database/docker-compose.yml --profile api up -d"
+    "token:new": "node scripts/new-token.js",
+    "setup:local": "node -e \"require('fs').copyFileSync('local.settings.example.json','local.settings.json',require('fs').constants.COPYFILE_EXCL)\""
   },
   "dependencies": {
     "@azure/functions": "^4.5.0",

@@ -73,8 +73,8 @@ Telefonul citește senzorii (~10 Hz pentru accelerometru/magnetometru, ~1 Hz pen
 |---|---|---|
 | `schemaVersion` | da | mereu `"1.0"` acum; la o schimbare incompatibilă creștem versiunea |
 | `deviceId` | da | ID stabil al telefonului (generat la prima pornire, salvat cu AsyncStorage). 3–64 caractere: litere, cifre, `_ . : -` |
-| `ownerId` | nu | temporar din aplicație; mai târziu vine din login, nu din telefon |
-| `vehicleId` | nu | mașina aleasă în aplicație (ex. `CAR-01`) |
+| `ownerId` | nu* | firma (ex. `company_A`). *Obligatoriu când autorizarea e activă (în Azure) |
+| `vehicleId` | nu* | mașina aleasă în aplicație (ex. `CAR-01`). *Obligatoriu când autorizarea e activă |
 | `baselinePressureHpa` | nu | presiunea de referință de la începutul sesiunii; dacă lipsește, se ia prima citire |
 | `sessionId` | da | o înregistrare Start -> Stop. Originea poziției 3D și presiunea de referință sunt per sesiune |
 | `batchId` | da | unic per lot (ex. UUID). **La retry se retrimite același `batchId`**, iar backend-ul nu salvează de două ori |
@@ -119,7 +119,10 @@ Test de 10 secunde pe fiecare telefon nou: îl pui plat pe masă, cu ecranul în
 | `201` | salvat. Body: `{ status: "accepted", batchId, events, state }` (`state` = orientarea + poziția calculate) | trece mai departe |
 | `200` | `{ status: "duplicate" }`: lotul era deja salvat (retry) | îl consideră trimis |
 | `400` | `{ error, details: [...] }`: date invalide (`error` conține prima problemă) | **nu** reîncearcă; afișează `error` |
-| `401` | cheie lipsă/greșită, doar dacă `DEVICE_API_KEY` e setat în backend. Se acceptă `Authorization: Bearer <cheie>` (cum trimite aplicația) sau `x-device-key: <cheie>` | verifică token-ul |
+| `401` | token lipsă, necunoscut sau expirat (`Authorization: Bearer <token>`) | verifică tokenul |
+| `403` | tokenul e al altei firme sau vehiculul nu e alocat firmei | verifică ownerId/vehicleId |
+| `409` | același `eventId`/`batchId` a fost primit deja cu alt conținut | nu reîncerca; mută la „respinse” |
+| `413` | body peste 256 KB | trimite loturi mai mici |
 | `503` | baza de date indisponibilă (ex. Azure SQL se trezește din pauză) | reîncearcă: 1 s, 2 s, 4 s ... max 30 s |
 
 ## Starea procesată (ce primește dashboard-ul)

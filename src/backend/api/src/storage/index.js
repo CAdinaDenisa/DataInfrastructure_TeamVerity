@@ -8,7 +8,7 @@ let store;
 function getStore() {
   if (!store) {
     store = config.getStorageMode() === 'sql'
-      ? createSqlStore(config.getConnectionString())
+      ? createSqlStore(config.getSqlConfig())
       : createMemoryStore();
   }
   return store;

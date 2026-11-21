@@ -1,3 +1,5 @@
+import { createCarScene, bodyColorFor } from "./scene3d.js";
+
 const rawContext = sessionStorage.getItem("selected_report_context");
 const context = rawContext
   ? JSON.parse(rawContext)
@@ -69,7 +71,6 @@ function initCarVisuals() {
 initCarVisuals();
 
 // Generare 120 puncte de telemetrie (urcare și coborâre).
-// `rough` (0..1) = intensitatea drumului neasfaltat, cu tranziție lină la capete.
 const TOTAL_POINTS = 120;
 const telemetryPoints = [];
 
@@ -96,7 +97,6 @@ for (let i = 0; i < TOTAL_POINTS; i++) {
     roll,
     yaw,
     rough,
-    // pe drum neasfaltat accelerometrul (Z) oscilează mai mult
     accel: [+(Math.sin(angle) * 0.25).toFixed(2), -0.98, +(0.12 + pitch * 0.01 + rough * Math.sin(i * 5) * 0.35).toFixed(2)],
     mag: [+(22 + Math.cos(angle) * 15).toFixed(1), +(-6 + Math.sin(angle) * 15).toFixed(1), -40.5]
   });
@@ -105,7 +105,7 @@ for (let i = 0; i < TOTAL_POINTS; i++) {
 const maxAlt = Math.max(...telemetryPoints.map((p) => p.altitude)).toFixed(1);
 document.getElementById("val-dist").textContent = `${report.distance || "8.7 km"} • ${report.duration || "24 min"}`;
 
-// Populare tabel citiri reprezentative (indexul 60 cade pe segmentul de drum neasfaltat)
+// Populare tabel citiri reprezentative
 const tbody = document.getElementById("readings-table-body");
 [0, 35, 60, 115].forEach((idx) => {
   const p = telemetryPoints[idx];
@@ -123,7 +123,6 @@ const tbody = document.getElementById("readings-table-body");
 
 // ======================================================================
 //  RECOMANDĂRI & MENTENANȚĂ PREDICTIVĂ — pentru ACEASTĂ zi
-//  (Aceeași logică există și în app.js, ca să nu avem fișier nou.)
 // ======================================================================
 const REC_LABELS = {
   ice: { minor: "Schimb ulei", major: "Distribuție / revizie majoră" },
@@ -134,8 +133,6 @@ function fmtKm(n) {
   return Math.round(n).toLocaleString("ro-RO");
 }
 
-// Statisticile zilei: ce se poate deduce din punctele de telemetrie se calculează,
-// restul (frânări, viraje etc.) sunt valori de test până vin datele reale din backend.
 function buildSessionStats() {
   const dist = parseFloat(String(report.distance || "").replace(",", ".")) || 5;
   const n = telemetryPoints.length;
@@ -152,7 +149,6 @@ function buildSessionStats() {
 
   return {
     distanceKm: dist,
-    // calculate din telemetrie
     roughPct: roughShare * 100,
     roughKm: dist * roughShare,
     elevGainM: Math.max(...alts),
@@ -164,7 +160,6 @@ function buildSessionStats() {
     magStdUT: magStd,
     magOutOfRangePct: magOut,
     hasBaro: true,
-    // valori de test (se înlocuiesc cu cele reale din backend)
     hardBrakes: Math.round(dist * (0.3 + (seed % 5) / 10)),
     hardAccels: 1,
     maxLateralG: car.id === "car-1" ? 0.62 : 0.35,
@@ -185,7 +180,6 @@ function buildCarRecommendations(carData, s) {
   const per10 = (v) => ((v || 0) / dist) * 10;
   const odo = carData.odometerKm || 0;
 
-  // Drum prost și trafic aglomerat scurtează intervalul efectiv de service (max ~20%)
   const wear = 1 - Math.min(0.12, (s.roughPct || 0) / 200) - Math.min(0.08, (s.stopGoPct || 0) / 500);
 
   const service = (step, w, lastKm) => {
@@ -199,7 +193,6 @@ function buildCarRecommendations(carData, s) {
   const items = [];
   const add = (level, sensor, text, weight) => items.push({ level, sensor, text, weight });
 
-  // --- Kilometraj ---
   if (minor.left <= 1500) {
     add("danger", "Kilometraj", `${L.minor}: mai sunt aproximativ ${fmtKm(minor.left)} km până la termen.`, 90);
   } else if (minor.left <= 3000) {
@@ -212,7 +205,6 @@ function buildCarRecommendations(carData, s) {
     add("info", "Condiții", `Condiții solicitante recent: intervalul efectiv de service e scurtat cu ~${Math.round((1 - wear) * 100)}%.`, 20);
   }
 
-  // --- Accelerometru: drum, suspensii, roți, frâne ---
   if ((s.roughPct || 0) >= 5 || (s.roughKm || 0) >= 1) {
     add("warn", "Accelerometru", `~${(s.roughKm || 0).toFixed(1)} km pe drum neasfaltat/denivelat. Merită o privire la suspensii, bucșe și presiunea din pneuri.`, 60);
   }
@@ -252,7 +244,6 @@ function buildCarRecommendations(carData, s) {
     add("info", "Accelerometru", "Trafic aglomerat și curse scurte: solicitare mai mare pentru frâne și ulei/baterie.", 24);
   }
 
-  // --- Barometru: relief, altitudine, vreme ---
   if (s.hasBaro === false) {
     add("info", "Barometru", "Telefonul nu are barometru: recomandările legate de relief nu sunt disponibile.", 10);
   } else {
@@ -273,7 +264,6 @@ function buildCarRecommendations(carData, s) {
     }
   }
 
-  // --- Magnetometru: câmp magnetic / interferențe ---
   if ((s.magOutOfRangePct || 0) >= 10) {
     add("warn", "Magnetometru", `Câmp magnetic perturbat (medie ~${(s.magMeanUT || 0).toFixed(0)} µT, normal 25–65). Mută telefonul de magneți/cabluri și recalibrează busola; dacă persistă, verifică instalația electrică.`, 40);
   } else if ((s.magStdUT || 0) >= 12) {
@@ -383,151 +373,34 @@ if (chartCtx && window.Chart) {
   });
 }
 
-// Harta 3D Isometrică din stânga-jos
-const canvas = document.getElementById("trajectoryCanvas");
-const ctx = canvas.getContext("2d");
+// ---- Traiectorie 3D (three.js) ----
 const slider = document.getElementById("timeline-slider");
 const playPauseBtn = document.getElementById("play-pause-btn");
 const altReadout = document.getElementById("live-alt-readout");
+
+const sceneHost = document.getElementById("trajectory3d") || document.querySelector(".canvas-3d-wrapper");
+const scene3d = createCarScene(sceneHost, {
+  trailColor: car.color,
+  bodyColor: bodyColorFor(car)
+});
+scene3d.setPath(
+  telemetryPoints.map((p) => ({ x: p.x, y: p.y, z: p.altitude, rough: p.rough }))
+);
 
 slider.max = TOTAL_POINTS - 1;
 let currentIndex = 0;
 let isPlaying = true;
 
-function projectIso(x, y, z) {
-  const cx = canvas.width / 2;
-  const cy = canvas.height / 2 + 52;
-  return {
-    sx: cx + x * 1.15 + y * 0.28,
-    sy: cy + y * 0.55 - z * 2.8
-  };
-}
+function showIndex(idx, snap = false) {
+  const p = telemetryPoints[idx];
+  scene3d.setCarAt(idx, snap);
 
-function drawPorsche3DMarker(sx, sy, slopeAngle, goingLeft, altitude, rough) {
-  // vibrație foarte mică, doar pe mașină (nu pe traseu)
-  const t = Date.now() / 1000;
-  const jitterY = rough * Math.sin(t * 38) * 1.0;
-  const jitterA = rough * Math.sin(t * 31) * 0.014;
-
-  ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-  ctx.beginPath();
-  ctx.ellipse(sx, sy + 16, 34, 9, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  if (loadedCarImg && loadedCarImg.complete && loadedCarImg.naturalWidth > 0) {
-    ctx.save();
-    ctx.translate(sx, sy - 6 + jitterY);
-    ctx.rotate(slopeAngle + jitterA);
-    if (goingLeft) {
-      ctx.scale(-1, 1);
-    }
-    ctx.drawImage(loadedCarImg, -46, -28, 92, 54);
-    ctx.restore();
-  } else {
-    ctx.fillStyle = car.color;
-    ctx.beginPath();
-    ctx.arc(sx, sy, 9, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  ctx.fillStyle = "#f8fafc";
-  ctx.font = "bold 12px Segoe UI, sans-serif";
-  ctx.fillText(`+${altitude.toFixed(1)} m`, sx - 22, sy - 34);
-
-  if (rough > 0.5) {
-    ctx.fillStyle = "#d3a04a";
-    ctx.font = "10px Segoe UI, sans-serif";
-    ctx.fillText("drum neasfaltat", sx - 22, sy - 21);
-  }
-}
-
-function renderTrajectoryScene(activeIdx) {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
-  ctx.lineWidth = 1;
-  for (let gx = -320; gx <= 320; gx += 55) {
-    const p1 = projectIso(gx, -170, 0);
-    const p2 = projectIso(gx, 170, 0);
-    ctx.beginPath();
-    ctx.moveTo(p1.sx, p1.sy);
-    ctx.lineTo(p2.sx, p2.sy);
-    ctx.stroke();
-  }
-  for (let gy = -170; gy <= 170; gy += 42) {
-    const p1 = projectIso(-320, gy, 0);
-    const p2 = projectIso(320, gy, 0);
-    ctx.beginPath();
-    ctx.moveTo(p1.sx, p1.sy);
-    ctx.lineTo(p2.sx, p2.sy);
-    ctx.stroke();
-  }
-
-  // Drumul de pe sol: gri pe asfalt, chihlimbar discret pe segmentul neasfaltat
-  for (let i = 1; i < telemetryPoints.length; i++) {
-    const a = projectIso(telemetryPoints[i - 1].x, telemetryPoints[i - 1].y, 0);
-    const b = projectIso(telemetryPoints[i].x, telemetryPoints[i].y, 0);
-    const r = telemetryPoints[i].rough;
-    ctx.strokeStyle = r > 0.3 ? `rgba(211, 160, 74, ${0.3 + r * 0.3})` : "rgba(148, 163, 184, 0.22)";
-    ctx.lineWidth = r > 0.3 ? 3.5 : 2;
-    ctx.beginPath();
-    ctx.moveTo(a.sx, a.sy);
-    ctx.lineTo(b.sx, b.sy);
-    ctx.stroke();
-  }
-
-  telemetryPoints.forEach((pt, idx) => {
-    if (idx % 4 === 0) {
-      const g = projectIso(pt.x, pt.y, 0);
-      const e = projectIso(pt.x, pt.y, pt.altitude);
-      ctx.strokeStyle = "rgba(56, 189, 248, 0.22)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(g.sx, g.sy);
-      ctx.lineTo(e.sx, e.sy);
-      ctx.stroke();
-    }
-  });
-
-  ctx.strokeStyle = car.color;
-  ctx.lineWidth = 3.5;
-  ctx.beginPath();
-  telemetryPoints.forEach((pt, idx) => {
-    const e = projectIso(pt.x, pt.y, pt.altitude);
-    if (idx === 0) ctx.moveTo(e.sx, e.sy);
-    else ctx.lineTo(e.sx, e.sy);
-  });
-  ctx.stroke();
-
-  const currentPt = telemetryPoints[activeIdx];
-  // înclinația pe o fereastră mai lungă => fără tremur
-  const refPt = telemetryPoints[Math.max(0, activeIdx - 3)];
-  const pCurr = projectIso(currentPt.x, currentPt.y, currentPt.altitude);
-  const pRef = projectIso(refPt.x, refPt.y, refPt.altitude);
-  const pGround = projectIso(currentPt.x, currentPt.y, 0);
-
-  ctx.strokeStyle = "rgba(56, 189, 248, 0.7)";
-  ctx.setLineDash([4, 4]);
-  ctx.beginPath();
-  ctx.moveTo(pGround.sx, pGround.sy);
-  ctx.lineTo(pCurr.sx, pCurr.sy);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  const dx = pCurr.sx - pRef.sx;
-  const dy = pCurr.sy - pRef.sy;
-  const goingLeft = dx < 0;
-  const rawSlope = Math.atan2(dy, Math.abs(dx) || 0.01);
-  const slopeAngle = Math.max(-0.48, Math.min(0.48, goingLeft ? -rawSlope : rawSlope));
-
-  drawPorsche3DMarker(pCurr.sx, pCurr.sy, slopeAngle, goingLeft, currentPt.altitude, currentPt.rough);
-
-  altReadout.textContent = `+${currentPt.altitude.toFixed(1)} m`;
-  document.getElementById("val-alt").textContent = `+${maxAlt} m / +${currentPt.altitude.toFixed(1)} m`;
-  document.getElementById("val-orient").textContent = `${currentPt.pitch}° / ${currentPt.roll}° / ${currentPt.yaw}°`;
-  document.getElementById("val-accel").textContent = `${currentPt.accel.join(", ")} g`;
-  document.getElementById("val-mag").textContent = `${currentPt.mag.join(", ")} µT`;
-  document.getElementById("val-baro").textContent = `${currentPt.pressure} hPa`;
+  altReadout.textContent = `+${p.altitude.toFixed(1)} m`;
+  document.getElementById("val-alt").textContent = `+${maxAlt} m / +${p.altitude.toFixed(1)} m`;
+  document.getElementById("val-orient").textContent = `${p.pitch}° / ${p.roll}° / ${p.yaw}°`;
+  document.getElementById("val-accel").textContent = `${p.accel.join(", ")} g`;
+  document.getElementById("val-mag").textContent = `${p.mag.join(", ")} µT`;
+  document.getElementById("val-baro").textContent = `${p.pressure} hPa`;
 }
 
 playPauseBtn.addEventListener("click", () => {
@@ -539,14 +412,14 @@ slider.addEventListener("input", (e) => {
   isPlaying = false;
   playPauseBtn.textContent = "▶ Redă";
   currentIndex = Number(e.target.value);
-  renderTrajectoryScene(currentIndex);
+  showIndex(currentIndex);
 });
 
 setInterval(() => {
   if (!isPlaying) return;
   currentIndex = (currentIndex + 1) % TOTAL_POINTS;
   slider.value = currentIndex;
-  renderTrajectoryScene(currentIndex);
+  showIndex(currentIndex, currentIndex === 0);
 }, 90);
 
-renderTrajectoryScene(0);
+showIndex(0, true);

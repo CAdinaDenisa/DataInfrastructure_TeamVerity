@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import { Accelerometer, Barometer, Magnetometer } from 'expo-sensors';
-import { SENSOR_INTERVAL_MS } from './config';
+import * as Location from 'expo-location';
+import { GPS_DISTANCE_INTERVAL_M, GPS_TIME_INTERVAL_MS, SENSOR_INTERVAL_MS } from './config';
 
 // Convenția backend-ului (src/backend/docs/01-format-json.md): convenția Android,
 // telefon pe masă cu ecranul în sus → accelerometrul ≈ (0, 0, +1) g.
@@ -37,7 +38,20 @@ export async function checkSensors() {
       result[key] = 'unavailable';
     }
   }
+  result.location = await checkLocation();
   return result;
+}
+
+// GPS: fără el backend-ul nu are poziție orizontală (x/y), deci traseul de pe dashboard nu se mișcă.
+async function checkLocation() {
+  try {
+    const perm = await Location.requestForegroundPermissionsAsync();
+    if (perm.status !== 'granted') return 'denied';
+    const enabled = await Location.hasServicesEnabledAsync();
+    return enabled ? 'live' : 'unavailable';
+  } catch {
+    return 'unavailable';
+  }
 }
 
 // Pornește ascultătorii doar pentru senzorii disponibili.
@@ -72,6 +86,30 @@ export function startSensors(status, onReading) {
       }
     }
     subs.push(Barometer.addListener(({ pressure }) => onReading('pressure', { value: pressure, unit: 'hPa' })));
+  }
+
+  if (status.location === 'live') {
+    // Precizie maximă și fără prag de distanță: vrem și mișcările de câțiva metri.
+    // watchPositionAsync e asincron; dacă oprim înainte să pornească, îl închidem imediat.
+    let stopped = false;
+    Location.watchPositionAsync(
+      { accuracy: Location.Accuracy.BestForNavigation, timeInterval: GPS_TIME_INTERVAL_MS, distanceInterval: GPS_DISTANCE_INTERVAL_M },
+      ({ coords, timestamp }) =>
+        onReading('location', {
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          altitude: coords.altitude ?? null,
+          accuracy: coords.accuracy ?? null,
+          altitudeAccuracy: coords.altitudeAccuracy ?? null,
+          speed: coords.speed ?? null,
+          heading: coords.heading ?? null,
+          timestamp,
+        }),
+      () => {} // eroare GPS: continuăm fără locație
+    )
+      .then((sub) => (stopped ? sub.remove() : subs.push(sub)))
+      .catch(() => {});
+    subs.push({ remove: () => { stopped = true; } });
   }
 
   return () => {

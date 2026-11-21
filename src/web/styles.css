@@ -605,3 +605,128 @@ body.porsche-bg {
 .recommendations-box details[open] summary::before {
   content: "– ";
 }
+
+/* ===== Scena 3D ===== */
+.scene3d {
+  position: relative;
+  width: 100%;
+  height: 270px;
+  overflow: hidden;
+  cursor: grab;
+}
+.scene3d:active { cursor: grabbing; }
+.scene3d canvas { display: block; width: 100%; height: 100%; }
+
+/* overlay-ul cu telemetrie nu mai blochează rotirea cu mouse-ul */
+.mini-map-overlay { pointer-events: none; }
+
+.scene-tools {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 6px;
+  z-index: 3;
+}
+.scene-btn {
+  background: rgba(8, 11, 18, 0.72);
+  color: #e2e8f0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+.scene-btn:hover { background: rgba(255, 255, 255, 0.14); }
+.scene-btn.active {
+  border-color: rgba(225, 29, 72, 0.8);
+  background: rgba(225, 29, 72, 0.3);
+  color: #fff;
+}
+
+.scene-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  pointer-events: none;
+  text-align: center;
+  white-space: nowrap;
+  font: 700 11px "Segoe UI", sans-serif;
+  color: #f8fafc;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+.scene-label small {
+  display: block;
+  font-weight: 500;
+  font-size: 10px;
+  color: #d3a04a;
+}
+
+/* ===== Scena 3D ===== */
+.scene3d {
+  position: relative;
+  width: 100%;
+  height: 270px;
+  overflow: hidden;
+  cursor: grab;
+}
+.scene3d:active { cursor: grabbing; }
+.scene3d canvas { display: block; width: 100%; height: 100%; }
+
+/* overlay-ul cu telemetrie nu mai blochează rotirea cu mouse-ul */
+.mini-map-overlay { pointer-events: none; }
+
+.scene-tools {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 6px;
+  z-index: 3;
+}
+.scene-btn {
+  background: rgba(8, 11, 18, 0.72);
+  color: #e2e8f0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+.scene-btn:hover { background: rgba(255, 255, 255, 0.14); }
+.scene-btn.active {
+  border-color: rgba(225, 29, 72, 0.8);
+  background: rgba(225, 29, 72, 0.3);
+  color: #fff;
+}
+
+.scene-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  pointer-events: none;
+  text-align: center;
+  white-space: nowrap;
+  font: 700 11px "Segoe UI", sans-serif;
+  color: #f8fafc;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+.scene-label small {
+  display: block;
+  font-weight: 500;
+  font-size: 10px;
+  color: #d3a04a;
+}
+
+/* Fix dimensiune canvas 3D în pagina de raport */
+#report3dContainer,
+.report-3d-canvas,
+.trajectory-3d-box {
+  width: 100%;
+  height: 360px !important;
+  min-height: 360px !important;
+  position: relative;
+  display: block;
+}

@@ -1,3 +1,11 @@
+import { createCarScene, bodyColorFor } from "./scene3d.js";
+const scenes = {};
+function disposeScenes() {
+  Object.keys(scenes).forEach((id) => {
+    scenes[id].dispose();
+    delete scenes[id];
+  });
+}
 const STORAGE_KEY = "porsche_hecaton_fleet_v6";
 
 const defaultFleet = [
@@ -85,55 +93,9 @@ function loadCarImage(imageBase, onReady) {
   return entry;
 }
 
-function projectIsoMini(x, y, z, width, height) {
-  const cx = width / 2;
-  const cy = height / 2 + 32;
-  return {
-    sx: cx + x * 0.95 + y * 0.25,
-    sy: cy + y * 0.45 - z * 2.1
-  };
-}
 
-// rough: 0..1 = intensitatea drumului neasfaltat (cu tranziție lină).
-// Vibrația se aplică doar mașinii (≈1px / ≈0.8°), nu traiectoriei.
-function drawPorscheOnMap(ctx, sx, sy, slopeAngleRad, goingLeft, imageBase, fallbackColor, altText, rough, t) {
-  const asset = carImageCache[imageBase];
-  const jitterY = rough * Math.sin(t * 38) * 0.9;
-  const jitterA = rough * Math.sin(t * 31) * 0.014;
 
-  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
-  ctx.beginPath();
-  ctx.ellipse(sx, sy + 14, 28, 7, 0, 0, Math.PI * 2);
-  ctx.fill();
 
-  if (asset && asset.loaded && asset.img) {
-    ctx.save();
-    ctx.translate(sx, sy - 6 + jitterY);
-    ctx.rotate(slopeAngleRad + jitterA);
-    if (goingLeft) {
-      ctx.scale(-1, 1);
-    }
-    ctx.drawImage(asset.img, -44, -26, 88, 52);
-    ctx.restore();
-  } else {
-    ctx.fillStyle = fallbackColor;
-    ctx.beginPath();
-    ctx.arc(sx, sy, 8, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  ctx.fillStyle = "#f8fafc";
-  ctx.font = "bold 11px Segoe UI, sans-serif";
-  ctx.fillText(altText, sx - 24, sy - 30);
-
-  if (rough > 0.5) {
-    ctx.globalAlpha = Math.min(1, (rough - 0.5) * 2) * 0.85;
-    ctx.fillStyle = "#d3a04a";
-    ctx.font = "10px Segoe UI, sans-serif";
-    ctx.fillText("drum neasfaltat", sx - 24, sy - 18);
-    ctx.globalAlpha = 1;
-  }
-}
 
 // ======================================================================
 //  RECOMANDĂRI & MENTENANȚĂ PREDICTIVĂ
@@ -325,6 +287,9 @@ function renderRecommendations(rec, visible = 2) {
 const liveSimState = {};
 
 function renderFleet() {
+  disposeScenes();                       // <-- NOU (prima linie)
+  // scenele se recreează: la următorul poll reîncărcăm traseul real
+  Object.values(liveApi).forEach((l) => (l.loaded = false));
   const grid = document.getElementById("fleet-grid");
   grid.innerHTML = "";
 
@@ -334,7 +299,7 @@ function renderFleet() {
       liveSimState[car.id] = {
         t: index * 1.4,
         rough: 0,
-        trail: []
+
       };
     }
 
@@ -355,7 +320,7 @@ function renderFleet() {
       </div>
 
       <div class="mini-map-box">
-        <canvas id="canvas-${car.id}" width="640" height="270"></canvas>
+        <div id="scene-${car.id}" class="scene3d"></div>
         <div class="mini-map-overlay">
           <span id="telemetry-pos-${car.id}">Poziție: X 0.0m, Y 0.0m</span>
           <span id="telemetry-alt-${car.id}">Altitudine: +0.0m • Pitch: 0.0°</span>
@@ -403,6 +368,13 @@ function renderFleet() {
 
     grid.appendChild(card);
 
+        scenes[car.id] = createCarScene(card.querySelector(`#scene-${car.id}`), {
+      trailColor: car.color,
+      bodyColor: bodyColorFor(car),
+      zoom: false,      // scroll-ul paginii nu mai e capturat de scenă
+      maxPoints: 700
+    });
+
     loadCarImage(base, (asset) => {
       const thumb = document.getElementById(`thumb-${car.id}`);
       if (thumb && asset.resolvedUrl) thumb.src = asset.resolvedUrl;
@@ -431,131 +403,6 @@ function renderFleet() {
   });
 }
 
-function animateMiniMaps() {
-  fleet.forEach((car) => {
-    const canvas = document.getElementById(`canvas-${car.id}`);
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    const state = liveSimState[car.id];
-    const base = car.imageBase || car.imageUrl || "./assets/porsche-silver";
-    state.t += 0.018;
-
-    const phase = state.t % (Math.PI * 2);
-    // Zona de "drum neasfaltat" este între unghiul 2.1 și 3.4 radiani
-    const onRoughSegment = phase > 2.1 && phase < 3.4;
-    // intrare / ieșire lină din zona de drum prost (nu mai apare brusc)
-    state.rough += ((onRoughSegment ? 1 : 0) - state.rough) * 0.08;
-    const rough = state.rough;
-
-    // Traiectoria rămâne NETEDĂ: vibrația nu mai e adăugată la altitudine
-    const x = Math.cos(state.t) * 210 + Math.sin(state.t * 2) * 45;
-    const y = Math.sin(state.t) * 105;
-    const z = Math.max(0, Math.sin(state.t * 1.4) * 24 + 12);
-    const pitch = (Math.cos(state.t * 1.4) * 8.5 + rough * Math.sin(state.t * 30) * 0.6).toFixed(1);
-
-    state.trail.push({ x, y, z, rough });
-    if (state.trail.length > 2500) state.trail.shift();
-    const trail = state.trail;
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Grid 3D
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
-    ctx.lineWidth = 1;
-    for (let gx = -260; gx <= 260; gx += 52) {
-      const p1 = projectIsoMini(gx, -140, 0, canvas.width, canvas.height);
-      const p2 = projectIsoMini(gx, 140, 0, canvas.width, canvas.height);
-      ctx.beginPath();
-      ctx.moveTo(p1.sx, p1.sy);
-      ctx.lineTo(p2.sx, p2.sy);
-      ctx.stroke();
-    }
-    for (let gy = -140; gy <= 140; gy += 35) {
-      const p1 = projectIsoMini(-260, gy, 0, canvas.width, canvas.height);
-      const p2 = projectIsoMini(260, gy, 0, canvas.width, canvas.height);
-      ctx.beginPath();
-      ctx.moveTo(p1.sx, p1.sy);
-      ctx.lineTo(p2.sx, p2.sy);
-      ctx.stroke();
-    }
-
-    if (trail.length > 1) {
-      // Drumul de pe sol: gri pe asfalt, chihlimbar discret (mai gros, cu "pietriș") pe drum neasfaltat
-      for (let i = 1; i < trail.length; i++) {
-        const a = projectIsoMini(trail[i - 1].x, trail[i - 1].y, 0, canvas.width, canvas.height);
-        const b = projectIsoMini(trail[i].x, trail[i].y, 0, canvas.width, canvas.height);
-        const r = trail[i].rough;
-        ctx.strokeStyle = r > 0.3 ? `rgba(211, 160, 74, ${0.25 + r * 0.3})` : "rgba(148, 163, 184, 0.2)";
-        ctx.lineWidth = r > 0.3 ? 3 : 2;
-        ctx.beginPath();
-        ctx.moveTo(a.sx, a.sy);
-        ctx.lineTo(b.sx, b.sy);
-        ctx.stroke();
-
-        if (r > 0.5 && i % 5 === 0) {
-          const off = ((i * 7) % 5) - 2;
-          ctx.fillStyle = "rgba(211, 160, 74, 0.45)";
-          ctx.fillRect(b.sx + off * 2, b.sy + off, 1.4, 1.4);
-        }
-      }
-
-      // Stâlpi verticali (neutri)
-      trail.forEach((pt, i) => {
-        if (i % 12 === 0) {
-          const g = projectIsoMini(pt.x, pt.y, 0, canvas.width, canvas.height);
-          const e = projectIsoMini(pt.x, pt.y, pt.z, canvas.width, canvas.height);
-          ctx.strokeStyle = "rgba(56, 189, 248, 0.2)";
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(g.sx, g.sy);
-          ctx.lineTo(e.sx, e.sy);
-          ctx.stroke();
-        }
-      });
-
-      // Traseul în aer: mereu culoarea mașinii, neted
-      ctx.strokeStyle = car.color;
-      ctx.lineWidth = 3.2;
-      ctx.beginPath();
-      trail.forEach((pt, i) => {
-        const e = projectIsoMini(pt.x, pt.y, pt.z, canvas.width, canvas.height);
-        if (i === 0) ctx.moveTo(e.sx, e.sy);
-        else ctx.lineTo(e.sx, e.sy);
-      });
-      ctx.stroke();
-
-      const currPt = trail[trail.length - 1];
-      // Înclinația se calculează pe o fereastră mai lungă => mașina nu mai "salută" la fiecare cadru
-      const refPt = trail[Math.max(0, trail.length - 9)];
-      const currScreen = projectIsoMini(currPt.x, currPt.y, currPt.z, canvas.width, canvas.height);
-      const refScreen = projectIsoMini(refPt.x, refPt.y, refPt.z, canvas.width, canvas.height);
-      const groundScreen = projectIsoMini(currPt.x, currPt.y, 0, canvas.width, canvas.height);
-
-      ctx.strokeStyle = "rgba(56, 189, 248, 0.7)";
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath();
-      ctx.moveTo(groundScreen.sx, groundScreen.sy);
-      ctx.lineTo(currScreen.sx, currScreen.sy);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      const dx = currScreen.sx - refScreen.sx;
-      const dy = currScreen.sy - refScreen.sy;
-      const goingLeft = dx < 0;
-      const rawSlope = Math.atan2(dy, Math.abs(dx) || 0.01);
-      const slopeAngle = Math.max(-0.48, Math.min(0.48, goingLeft ? -rawSlope : rawSlope));
-
-      drawPorscheOnMap(ctx, currScreen.sx, currScreen.sy, slopeAngle, goingLeft, base, car.color, `+${z.toFixed(1)}m`, rough, state.t);
-    }
-
-    const posEl = document.getElementById(`telemetry-pos-${car.id}`);
-    const altEl = document.getElementById(`telemetry-alt-${car.id}`);
-    if (posEl) posEl.textContent = rough > 0.5 ? "Suprafață: drum neasfaltat (vibrații)" : `Poziție: X ${x.toFixed(1)}m, Y ${y.toFixed(1)}m`;
-    if (altEl) altEl.textContent = `Altitudine: +${z.toFixed(1)}m • Pitch: ${pitch}°`;
-  });
-
-  requestAnimationFrame(animateMiniMaps);
-}
 
 const modal = document.getElementById("add-car-modal");
 document.getElementById("add-car-btn").addEventListener("click", () => modal.classList.remove("hidden"));
@@ -597,5 +444,128 @@ document.getElementById("add-car-form").addEventListener("submit", (e) => {
   renderFleet();
 });
 
+/* ------------------------------------------------------------------ */
+/*  Date reale din backend (Azure Functions)                          */
+/* ------------------------------------------------------------------ */
+// config.js (copiat din config.example.js): apiBaseUrl, apiToken (opțional), pollIntervalMs.
+// Pentru fiecare mașină citim ultima stare a telefonului cu deviceId-ul ei (seria de șasiu / VIN).
+// Dacă nu avem API sau telefonul nu a trimis nimic, cardul rămâne pe simulare.
+const API = window.APP_CONFIG || {};
+const API_BASE = (API.apiBaseUrl || "").replace(/\/+$/, "");
+const POLL_MS = Math.max(500, API.pollIntervalMs || 1000);
+const LIVE_STALE_MS = 2 * 60 * 1000; // o stare mai veche de 2 minute nu mai e „live”
+const liveApi = {}; // carId -> { active, sessionId, lastTs, loaded }
+
+async function apiGet(path) {
+  const headers = API.apiToken ? { Authorization: `Bearer ${API.apiToken}` } : {};
+  const res = await fetch(`${API_BASE}${path}`, { headers });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`${res.status} ${path}`);
+  return res.json();
+}
+
+const roughOf = (advice) => (advice && /rough|pothole/i.test(advice) ? 1 : 0);
+
+function showLiveTelemetry(car, p, pitch, extra = "") {
+  const posEl = document.getElementById(`telemetry-pos-${car.id}`);
+  const altEl = document.getElementById(`telemetry-alt-${car.id}`);
+  if (posEl) posEl.textContent = `Poziție: X ${p.x.toFixed(1)}m, Y ${p.y.toFixed(1)}m${extra}`;
+  if (altEl) altEl.textContent = `Altitudine: ${p.z >= 0 ? "+" : ""}${p.z.toFixed(1)}m • Pitch: ${(pitch ?? 0).toFixed(1)}°`;
+}
+
+async function pollCar(car) {
+  const scene = scenes[car.id];
+  if (!scene || !car.deviceId) return;
+  const live = (liveApi[car.id] ||= { active: false, sessionId: null, lastTs: null, loaded: false });
+
+  const st = await apiGet(`/devices/${encodeURIComponent(car.deviceId)}/state`);
+  const pos = st && st.position;
+  const fresh = st && Date.now() - Date.parse(st.timestamp) < LIVE_STALE_MS;
+  if (!pos || pos.x == null || pos.y == null || !fresh) {
+    // fără GPS (x/y lipsesc) sau date vechi: nu avem traseu de desenat
+    if (live.active) {
+      live.active = false;
+      scene.clear();
+    }
+    return;
+  }
+
+  // cursă nouă sau scenă recreată: încărcăm tot traseul de până acum
+  if (!live.active || !live.loaded || st.sessionId !== live.sessionId) {
+    live.active = true;
+    live.sessionId = st.sessionId;
+    live.loaded = true;
+    live.lastTs = null;
+    scene.clear();
+    try {
+      const track = await apiGet(`/sessions/${encodeURIComponent(st.sessionId)}/track?points=700`);
+      const pts = (track?.points || [])
+        .filter((q) => q.x != null && q.y != null)
+        .map((q) => ({ x: q.x, y: q.y, z: q.altRelM ?? 0, rough: roughOf(q.advice) }));
+      if (pts.length) {
+        scene.setPath(pts);
+        scene.setCarAt(pts.length - 1, true);
+        live.lastTs = track.points[track.points.length - 1].t;
+      }
+    } catch (_) {
+      /* traseul complet e un bonus; continuăm cu punctele live */
+    }
+  }
+
+  if (st.timestamp === live.lastTs) return;
+  live.lastTs = st.timestamp;
+  const p = { x: pos.x, y: pos.y, z: pos.z ?? st.altitudeRel?.value ?? 0, rough: roughOf(st.advice) };
+  scene.pushPoint(p);
+  scene.setCar(p);
+  const acc = st.gps?.accuracy != null ? ` (GPS ±${Math.round(st.gps.accuracy)}m)` : "";
+  showLiveTelemetry(car, p, st.orientation?.pitch, acc);
+}
+
+async function pollLoop() {
+  await Promise.all(
+    fleet.map((car) =>
+      pollCar(car).catch(() => {
+        /* API indisponibil (CORS, rețea, token): cardul rămâne pe simulare */
+      })
+    )
+  );
+  setTimeout(pollLoop, POLL_MS);
+}
+
+function tickSimulation() {
+  fleet.forEach((car) => {
+    const scene = scenes[car.id];
+    const state = liveSimState[car.id];
+    if (!scene || !state) return;
+    if (liveApi[car.id]?.active) return; // are date reale: nu mai simulăm
+
+    state.t += 0.018;
+
+    const phase = state.t % (Math.PI * 2);
+    const onRoughSegment = phase > 2.1 && phase < 3.4;
+    state.rough += ((onRoughSegment ? 1 : 0) - state.rough) * 0.08;
+    const rough = state.rough;
+
+    const x = Math.cos(state.t) * 210 + Math.sin(state.t * 2) * 45;
+    const y = Math.sin(state.t) * 105;
+    const z = Math.max(0, Math.sin(state.t * 1.4) * 24 + 12);
+    const pitch = (Math.cos(state.t * 1.4) * 8.5 + rough * Math.sin(state.t * 30) * 0.6).toFixed(1);
+
+    // Când vin date reale din backend, doar aceste două apeluri înlocuiesc simularea:
+    scene.pushPoint({ x, y, z, rough });
+    scene.setCar({ x, y, z, rough });
+
+    const posEl = document.getElementById(`telemetry-pos-${car.id}`);
+    const altEl = document.getElementById(`telemetry-alt-${car.id}`);
+    if (posEl) posEl.textContent = rough > 0.5 ? "Suprafață: drum neasfaltat (vibrații)" : `Poziție: X ${x.toFixed(1)}m, Y ${y.toFixed(1)}m`;
+    if (altEl) altEl.textContent = `Altitudine: +${z.toFixed(1)}m • Pitch: ${pitch}°`;
+  });
+
+  requestAnimationFrame(tickSimulation);
+}
+
 renderFleet();
-animateMiniMaps();
+tickSimulation();
+if (API_BASE) pollLoop();
+
+renderFleet();

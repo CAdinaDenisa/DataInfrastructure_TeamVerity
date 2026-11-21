@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Detalii Raport — Porsche Hecaton</title>
   <link rel="stylesheet" href="./styles.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three.module.js",
+      "three/": "./vendor/"
+    }
+  }
+  </script>
 </head>
 <body class="porsche-bg">
   <header class="topbar">
@@ -104,9 +112,7 @@
           </div>
         </div>
 
-        <div class="canvas-3d-wrapper">
-          <canvas id="trajectoryCanvas" width="760" height="360"></canvas>
-        </div>
+        <div id="trajectory3d" class="canvas-3d-wrapper"></div>
       </div>
 
       <div class="card">
