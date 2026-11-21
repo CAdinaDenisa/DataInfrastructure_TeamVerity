@@ -1,0 +1,14 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "STORAGE_MODE": "sql",
+    "SQL_CONNECTION_STRING": "Server=localhost,1433;Database=porsche_hecaton;User Id=sa;Password=Local_Dev_Passw0rd!;Encrypt=true;TrustServerCertificate=true",
+    "DEVICE_API_KEY": ""
+  },
+  "Host": {
+    "LocalHttpPort": 7071,
+    "CORS": "*"
+  }
+}

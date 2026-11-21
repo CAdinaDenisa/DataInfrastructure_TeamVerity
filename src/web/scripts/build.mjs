@@ -1,4 +1,4 @@
-import { rm, mkdir, copyFile, access } from "node:fs/promises";
+import { rm, mkdir, copyFile, readdir, access } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -7,30 +7,38 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..");
 const distDir = path.join(rootDir, "dist");
 const vendorDir = path.join(distDir, "vendor");
+const assetsSrcDir = path.join(rootDir, "assets");
+const assetsDistDir = path.join(distDir, "assets");
 
 const publicFiles = [
   "index.html",
+  "report.html",
   "app.js",
-  "charts.js",
+  "report.js",
   "styles.css",
   "config.example.js"
 ];
 
 async function build() {
-  // 1. Curăță folderul dist
   await rm(distDir, { recursive: true, force: true });
-
-  // 2. Creează dist și dist/vendor
   await mkdir(vendorDir, { recursive: true });
+  await mkdir(assetsDistDir, { recursive: true });
 
-  // 3. Copiază fișierele publice (fără credențiale / config.js)
   for (const file of publicFiles) {
-    const src = path.join(rootDir, file);
-    const dest = path.join(distDir, file);
-    await copyFile(src, dest);
+    await copyFile(path.join(rootDir, file), path.join(distDir, file));
   }
 
-  // 4. Copiază bundle-ul UMD Chart.js în dist/vendor
+  // Copiază imaginile mașinilor din assets/
+  try {
+    const assetFiles = await readdir(assetsSrcDir);
+    for (const asset of assetFiles) {
+      await copyFile(path.join(assetsSrcDir, asset), path.join(assetsDistDir, asset));
+    }
+  } catch (_) {
+    console.warn("Atenție: folderul assets/ lipsește sau este gol.");
+  }
+
+  // Păstrăm și vendor/chart.umd.js pentru compatibilitate cu build-ul
   const chartSrc = path.join(rootDir, "node_modules", "chart.js", "dist", "chart.umd.js");
   const chartDest = path.join(vendorDir, "chart.umd.js");
   await access(chartSrc);

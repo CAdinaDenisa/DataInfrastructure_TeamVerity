@@ -3,51 +3,62 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Porsche Hecaton — Dashboard Telemetrie</title>
+  <title>Porsche Hecaton — Fleet Telemetry 3D</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
-<body>
+<body class="porsche-bg">
   <header class="topbar">
-    <h1>Porsche Hecaton — Telemetrie</h1>
-    <div id="connection-status" class="status offline">Offline</div>
+    <div class="brand">
+      <span class="brand-badge">HECATON</span>
+      <div>
+        <h1>Porsche Telemetry Command</h1>
+        <p class="subtitle">Monitorizare 3D în timp real &amp; rapoarte zilnice</p>
+      </div>
+    </div>
+
+    <div class="topbar-actions">
+      <div id="connection-status" class="status online">LIVE • 3D Stream</div>
+      <button id="add-car-btn" class="btn-primary">+ Adaugă Mașină</button>
+    </div>
   </header>
 
   <main class="container">
-    <section class="card">
-      <h2>Stare curentă dispozitiv (<span id="device-label">-</span>)</h2>
-      <div class="metrics-grid">
-        <div class="metric">
-          <span class="label">Pitch / Roll / Yaw</span>
-          <strong id="orientation-val">0° / 0° / 0°</strong>
-        </div>
-        <div class="metric">
-          <span class="label">Altitudine relativă</span>
-          <strong id="altitude-val">Indisponibilă</strong>
-        </div>
-      </div>
-    </section>
-
-    <section class="charts-grid">
-      <div class="card">
-        <h3>Accelerometru (g)</h3>
-        <canvas id="accelChart"></canvas>
-      </div>
-      <div class="card">
-        <h3>Magnetometru (µT)</h3>
-        <canvas id="magChart"></canvas>
-      </div>
-      <div class="card">
-        <h3>Barometru (hPa)</h3>
-        <canvas id="baroChart"></canvas>
-      </div>
-    </section>
+    <section id="fleet-grid" class="fleet-grid"></section>
   </main>
 
-  <!-- 1. Configurația -->
+  <!-- Modal pentru adăugarea unei mașini noi -->
+  <div id="add-car-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Adaugă vehicul în flotă</h2>
+      <form id="add-car-form">
+        <label>
+          Nume vehicul
+          <input type="text" id="car-name-input" placeholder="ex. Porsche 911 GT3" required />
+        </label>
+        <label>
+          Device ID (telefon)
+          <input type="text" id="car-device-input" placeholder="ex. phone-daniela-03" required />
+        </label>
+        <label>
+          Model vizual Porsche
+          <select id="car-image-input">
+            <option value="./assets/porsche-silver.png">Porsche 911 Turbo S (Argintiu)</option>
+            <option value="./assets/porsche-red.jpg">Porsche Taycan GTS (Roșu)</option>
+          </select>
+        </label>
+        <label>
+          Culoare traseu 3D
+          <input type="color" id="car-color-input" value="#38bdf8" />
+        </label>
+        <div class="modal-actions">
+          <button type="button" id="cancel-modal-btn" class="btn-ghost">Anulează</button>
+          <button type="submit" class="btn-primary">Salvează mașina</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script src="./config.js"></script>
-  <!-- 2. Bundle-ul local Chart.js UMD (înainte de scriptul aplicației) -->
-  <script src="./vendor/chart.umd.js"></script>
-  <!-- 3. Scriptul principal al aplicației -->
   <script type="module" src="./app.js"></script>
 </body>
 </html>
