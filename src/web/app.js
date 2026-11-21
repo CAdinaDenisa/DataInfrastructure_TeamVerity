@@ -1,290 +1,507 @@
 import { createCarScene, bodyColorFor } from "./scene3d.js";
+import {
+  api,
+  apiBase,
+  appConfig,
+  loadAuth,
+  saveAuth,
+  loadFleet,
+  saveFleet,
+  normalizeCar,
+  loadSessionsByVehicle,
+  fmtDistance,
+  fmtDuration,
+  fmtAlt,
+  fmtDateTime,
+  fmtTime,
+  escapeHtml
+} from "./api.js";
+import { statsFromSessions, buildRecommendations, renderRecommendations } from "./recs.js";
+
+// ======================================================================
+//  Verity Drive — Starea paginii
+//  Flota = VIN-urile detectate automat din baza de date
+//  Traseul live = GET /telemetry (se oprește automat când telefonul dă Stop)
+// ======================================================================
+const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/;
+const LIVE_WINDOW_MS = 60 * 1000;
+const STALE_POLLS_BEFORE_STOP = 3; // Oprește polling-ul după 3 citiri fără date noi
+
+let fleet = loadFleet();
+let auth = loadAuth();
 const scenes = {};
+const live = {}; // vin -> { lastEventId, latest, points, error, receivedAt, staleCount }
+let sessionsByVin = {};
+let seenDeviceIds = new Set();
+let connected = false;
+let pollingPaused = false;
+let lastSessionsLoad = 0;
+let healthInfo = null;
+
+const pollMs = Math.max(1000, Number(appConfig().pollIntervalMs) || 2000);
+const sessionsRefreshMs = Math.max(5000, Number(appConfig().sessionsRefreshMs) || 20000);
+
+// ---------------------------------------------------------------- elemente UI
+const ownerInput = document.getElementById("api-owner-input");
+const vinSelect = document.getElementById("api-vin-select");
+const vinInput = document.getElementById("api-vin-input");
+const connectBtn = document.getElementById("api-connect-btn");
+const syncHintEl = document.getElementById("api-sync-hint");
+const connBadgeEl = document.getElementById("connection-status");
+const apiUrlEl = document.getElementById("api-url-label");
+
+if (apiUrlEl) apiUrlEl.textContent = apiBase();
+if (ownerInput) ownerInput.value = auth.ownerId || "porsche";
+if (vinInput) vinInput.value = auth.vehicleId || "";
+
+function setBadge(text, online) {
+  if (!connBadgeEl) return;
+  connBadgeEl.className = online ? "status online" : "status";
+  connBadgeEl.textContent = text;
+}
+
+function setHint(text, isError = false) {
+  if (!syncHintEl) return;
+  syncHintEl.textContent = text;
+  syncHintEl.classList.toggle("hint-error", isError);
+}
+
+function updateConnectButton() {
+  if (!connectBtn) return;
+  if (connected && !pollingPaused) {
+    connectBtn.textContent = "Oprește Live";
+    connectBtn.className = "btn-ghost";
+  } else {
+    connectBtn.textContent = "Reia Live";
+    connectBtn.className = "btn-primary";
+  }
+}
+
+function syncVinSelector() {
+  if (!vinSelect) return;
+  vinSelect.innerHTML =
+    `<option value="">— toate șasiurile (${fleet.length}) —</option>` +
+    fleet.map((c) => `<option value="${escapeHtml(c.vin)}">${escapeHtml(c.name)} (${escapeHtml(c.vin)})</option>`).join("");
+  vinSelect.value = fleet.some((c) => c.vin === auth.vehicleId) ? auth.vehicleId : "";
+}
+
+function persistAuthFromUI() {
+  const latestAuth = loadAuth();
+  auth = {
+    ownerId: (ownerInput?.value || "porsche").trim() || "porsche",
+    vehicleId: (vinInput?.value || "").trim().toUpperCase(),
+    token: latestAuth.token || appConfig().apiToken || ""
+  };
+  if (vinInput) vinInput.value = auth.vehicleId;
+  saveAuth(auth);
+}
+
+function addCarIfMissing(vin, extra = {}) {
+  if (!vin || fleet.some((c) => c.vin === vin)) return false;
+  fleet.push(normalizeCar({ vin, ...extra }, fleet.length));
+  saveFleet(fleet);
+  return true;
+}
+
+function removeCarFromFleet(vin) {
+  fleet = fleet.filter((c) => c.vin !== vin);
+  saveFleet(fleet);
+  delete live[vin];
+  if (scenes[vin]) {
+    scenes[vin].dispose();
+    delete scenes[vin];
+  }
+  if (auth.vehicleId === vin) {
+    auth.vehicleId = "";
+    if (vinInput) vinInput.value = "";
+    saveAuth(auth);
+  }
+  syncVinSelector();
+  renderFleet();
+}
+
+vinSelect?.addEventListener("change", () => {
+  vinInput.value = vinSelect.value;
+  persistAuthFromUI();
+  if (vinSelect.value) {
+    document.getElementById(`card-${vinSelect.value}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+});
+
+const addVinBtn = document.getElementById("add-vin-btn");
+
+function handleAddOrFocusVin() {
+  persistAuthFromUI();
+  if (!auth.vehicleId) {
+    setHint("Introdu o serie de șasiu (17 caractere) în căsuță.", true);
+    return;
+  }
+  if (!VIN_RE.test(auth.vehicleId)) {
+    setHint(`„${auth.vehicleId}” nu e un VIN valid (17 caractere, fără I, O, Q).`, true);
+    return;
+  }
+  const isNew = addCarIfMissing(auth.vehicleId);
+  syncVinSelector();
+  renderFleet();
+  if (live[auth.vehicleId]) live[auth.vehicleId].staleCount = 0;
+  pollingPaused = false;
+  if (!connected) {
+    connect();
+  } else {
+    tick(true);
+  }
+  document.getElementById(`card-${auth.vehicleId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (isNew) {
+    setHint(`Vehiculul ${auth.vehicleId} a fost adăugat în dashboard.`);
+  }
+}
+
+vinInput?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    persistAuthFromUI();
+    pollingPaused = false;
+    if (!connected) connect();
+    else tick(true);
+  }
+});
+
+connectBtn?.addEventListener("click", () => {
+  if (connected && !pollingPaused) {
+    pollingPaused = true;
+    setBadge("Oprit manual", false);
+    setHint("Monitorizarea live a fost oprită. Apasă „Reia Live” când pornești cursa.");
+    updateConnectButton();
+    return;
+  }
+
+  persistAuthFromUI();
+  if (auth.vehicleId && !VIN_RE.test(auth.vehicleId)) {
+    setHint(`„${auth.vehicleId}” nu e un VIN valid (17 caractere, fără I, O, Q).`, true);
+    return;
+  }
+  if (addCarIfMissing(auth.vehicleId)) {
+    syncVinSelector();
+    renderFleet();
+  }
+  // Resetăm contoarele de inactivitate la pornire manuală
+  Object.values(live).forEach((entry) => {
+    entry.staleCount = 0;
+  });
+  pollingPaused = false;
+  connect();
+});
+
+// ---------------------------------------------------------------- conectare
+async function connect() {
+  connected = false;
+  pollingPaused = false;
+  updateConnectButton();
+
+  const latestAuth = loadAuth();
+  auth.token = latestAuth.token || appConfig().apiToken || "";
+
+  if (!auth.token) {
+    setBadge("Neconectat • token lipsă", false);
+    setHint("Tokenul API nu este configurat în config.js.", true);
+    return;
+  }
+
+  setBadge("Se conectează…", false);
+  setHint(`Verific ${apiBase()}/health …`);
+  try {
+    healthInfo = await api.health();
+  } catch (err) {
+    setBadge("API indisponibil", false);
+    setHint(err.message, true);
+    return;
+  }
+
+  if (healthInfo?.auth === "misconfigured") {
+    setBadge("API: autorizare greșit configurată", false);
+    setHint("Setarea DEMO_TENANTS_JSON din Azure nu e validă.", true);
+    return;
+  }
+  if (healthInfo?.auth === "enabled-no-tenants") {
+    setBadge("API: niciun token configurat", false);
+    setHint("DEMO_TENANTS_JSON e gol în Azure.", true);
+    return;
+  }
+
+  connected = true;
+  lastSessionsLoad = 0;
+  updateConnectButton();
+  await tick(true);
+}
+
+// ---------------------------------------------------------------- telemetrie live
+function eventToPoint(e) {
+  const d = e.derived || {};
+  const pos = d.position || {};
+  if (pos.x == null || pos.y == null) return null;
+  const alt = d.altitudeRel?.value ?? pos.z ?? 0;
+  return {
+    x: pos.x,
+    y: pos.y,
+    z: pos.z ?? alt,
+    altitude: alt,
+    pitch: d.orientation?.pitch ?? null,
+    roll: d.orientation?.roll ?? null,
+    yaw: d.orientation?.yaw ?? null,
+    rough: d.advice && /rough|pothole/i.test(d.advice) ? 1 : 0,
+    advice: d.advice || null,
+    t: d.capturedAtUtc || e.capturedAtUtc || e.receivedAtUtc
+  };
+}
+
+async function refreshLive(car) {
+  const vin = car.vin;
+  const entry = (live[vin] ||= { lastEventId: null, points: [], latest: null, error: null, staleCount: 0 });
+  try {
+    const res = await api.telemetry(auth, vin, { limit: 200 });
+    entry.error = null;
+    const events = res?.events || [];
+    events.forEach((e) => e.deviceId && seenDeviceIds.add(e.deviceId));
+    const latest = events[0] || null;
+    entry.latest = latest;
+    entry.receivedAt = latest?.receivedAtUtc || null;
+
+    if (!latest) {
+      entry.staleCount = (entry.staleCount || 0) + 1;
+      updateOverlay(car);
+      return false;
+    }
+
+    const latestId = `${latest.eventId || latest.batchId}|${latest.receivedAtUtc}`;
+    const isFreshTimestamp = Date.now() - Date.parse(entry.receivedAt) <= LIVE_WINDOW_MS;
+
+    if (latestId !== entry.lastEventId) {
+      entry.lastEventId = latestId;
+      entry.staleCount = isFreshTimestamp ? 0 : (entry.staleCount || 0) + 1;
+      entry.points = events
+        .filter((e) => e.sessionId === latest.sessionId)
+        .reverse()
+        .map(eventToPoint)
+        .filter(Boolean);
+      drawLive(car);
+      return isFreshTimestamp;
+    } else {
+      entry.staleCount = (entry.staleCount || 0) + 1;
+      updateOverlay(car);
+      return false;
+    }
+  } catch (err) {
+    entry.error = err;
+    updateOverlay(car);
+    if (err.kind === "network" || err.kind === "auth") throw err;
+    return false;
+  }
+}
+
+function drawLive(car) {
+  const entry = live[car.vin];
+  const scene = scenes[car.vin];
+  if (scene && entry?.points.length) {
+    const pts = entry.points;
+    scene.setPath(pts.map((p) => ({ x: p.x, y: p.y, z: p.z, rough: p.rough })));
+    const last = pts[pts.length - 1];
+    scene.setCar({ x: last.x, y: last.y, z: last.z, rough: last.rough });
+  }
+  updateOverlay(car);
+}
+
+function updateOverlay(car) {
+  const entry = live[car.vin];
+  const posEl = document.getElementById(`telemetry-pos-${car.vin}`);
+  const altEl = document.getElementById(`telemetry-alt-${car.vin}`);
+  const pillEl = document.getElementById(`live-pill-${car.vin}`);
+  if (!posEl || !altEl) return;
+
+  if (!connected) {
+    posEl.textContent = "Neconectat la API";
+    altEl.textContent = "";
+    if (pillEl) pillEl.className = "live-pill idle";
+    return;
+  }
+  if (entry?.error) {
+    posEl.textContent = entry.error.kind === "forbidden" ? "Fără acces la acest VIN (403)" : entry.error.message;
+    altEl.textContent = "";
+    if (pillEl) {
+      pillEl.className = "live-pill idle";
+      pillEl.textContent = "● FĂRĂ ACCES";
+    }
+    return;
+  }
+  if (!entry?.latest) {
+    posEl.textContent = "Nicio telemetrie în bază pentru acest VIN încă.";
+    altEl.textContent = "Pornește trimiterea din aplicația de telefon.";
+    if (pillEl) {
+      pillEl.className = "live-pill idle";
+      pillEl.textContent = "● FĂRĂ DATE";
+    }
+    return;
+  }
+  const isLive = !pollingPaused && Date.now() - Date.parse(entry.receivedAt) <= LIVE_WINDOW_MS;
+  if (pillEl) {
+    pillEl.className = isLive ? "live-pill" : "live-pill idle";
+    pillEl.textContent = isLive ? "● TRAIECTORIE 3D LIVE" : `● ULTIMA CURSĂ • ${fmtDateTime(entry.receivedAt)}`;
+  }
+  const last = entry.points[entry.points.length - 1];
+  if (!last) {
+    posEl.textContent = `Ultimul semnal: ${fmtTime(entry.receivedAt)} (fără poziție calculată)`;
+    altEl.textContent = "";
+    return;
+  }
+  posEl.textContent = last.rough
+    ? `Suprafață: drum denivelat • ${fmtTime(last.t)}`
+    : `Poziție: X ${last.x.toFixed(1)} m, Y ${last.y.toFixed(1)} m • ${fmtTime(last.t)}`;
+  altEl.textContent = `Altitudine: ${fmtAlt(last.altitude)}${last.pitch != null ? ` • Pitch: ${last.pitch.toFixed(1)}°` : ""}`;
+}
+
+// ---------------------------------------------------------------- rapoarte (sesiuni din bază)
+async function refreshSessions() {
+  const { byVehicle } = await loadSessionsByVehicle(auth, [...seenDeviceIds]);
+  sessionsByVin = byVehicle;
+  lastSessionsLoad = Date.now();
+
+  let added = false;
+  Object.keys(byVehicle).forEach((vin) => {
+    if (addCarIfMissing(vin)) added = true;
+  });
+
+  if (added) {
+    syncVinSelector();
+    renderFleet();
+  } else {
+    fleet.forEach(renderReportsAndRecs);
+  }
+}
+
+function kmSince(sessions, iso) {
+  if (!iso) return 0;
+  const t = Date.parse(iso);
+  return sessions.filter((s) => Date.parse(s.startedAt) >= t).reduce((a, s) => a + (s.distanceM || 0), 0) / 1000;
+}
+
+function renderReportsAndRecs(car) {
+  const tbody = document.getElementById(`reports-${car.vin}`);
+  const recsEl = document.getElementById(`recs-${car.vin}`);
+  const sessions = sessionsByVin[car.vin] || [];
+
+  if (tbody) {
+    if (!connected) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="5">Conectează API-ul ca să vezi rapoartele din bază.</td></tr>`;
+    } else if (!sessions.length) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="5">Nicio cursă înregistrată în bază pentru acest VIN.</td></tr>`;
+    } else {
+      tbody.innerHTML = sessions
+        .slice(0, 15)
+        .map(
+          (s) => `
+        <tr data-vin="${escapeHtml(car.vin)}" data-session="${escapeHtml(s.sessionId)}" data-device="${escapeHtml(s.deviceId)}">
+          <td><strong>${fmtDateTime(s.startedAt)}</strong></td>
+          <td>${s.status === "live" && !pollingPaused ? `<span class="badge-active">● În desfășurare</span>` : `<span class="badge-done">Finalizat</span>`}</td>
+          <td>${fmtDuration(s.durationSec)}</td>
+          <td>${fmtDistance(s.distanceM)}</td>
+          <td>${fmtAlt(s.maxAltRelM)}</td>
+        </tr>`
+        )
+        .join("");
+      tbody.querySelectorAll("tr[data-session]").forEach((row) => {
+        row.addEventListener("click", () => {
+          const p = new URLSearchParams({ vin: row.dataset.vin, session: row.dataset.session, device: row.dataset.device });
+          window.location.href = `./report.html?${p}`;
+        });
+      });
+    }
+  }
+
+  if (recsEl) {
+    if (!connected) {
+      recsEl.innerHTML = "";
+      return;
+    }
+    const stats = { ...statsFromSessions(sessions), kmSinceOdometer: kmSince(sessions, car.odometerSetAt) };
+    recsEl.innerHTML = renderRecommendations(
+      buildRecommendations(car, stats),
+      2,
+      sessions.length ? "Nimic de semnalat în cursele înregistrate." : "Aștept curse din baza de date pentru analiză."
+    );
+  }
+}
+
+// ---------------------------------------------------------------- bucla de actualizare (cu auto-stop la Stop de pe telefon)
+let ticking = false;
+async function tick(force = false) {
+  if (!connected || pollingPaused || ticking) return;
+  ticking = true;
+  try {
+    if (force || Date.now() - lastSessionsLoad >= sessionsRefreshMs) {
+      await refreshSessions();
+    }
+
+    const activeCars = auth.vehicleId
+      ? fleet.filter((c) => c.vin === auth.vehicleId)
+      : fleet;
+
+    const results = await Promise.all(activeCars.map((car) => refreshLive(car)));
+    const anyNewData = results.some(Boolean);
+
+    const allStale =
+      activeCars.length > 0 &&
+      activeCars.every((c) => (live[c.vin]?.staleCount || 0) >= STALE_POLLS_BEFORE_STOP);
+
+    if (!force && !anyNewData && allStale) {
+      pollingPaused = true;
+      updateConnectButton();
+      activeCars.forEach(updateOverlay);
+      fleet.forEach(renderReportsAndRecs);
+      setBadge("Sesiune oprită • În așteptare", false);
+      setHint("Nu mai vin date noi de pe telefon (Stop). Cererile s-au oprit automat. Apasă „Reia Live” la următoarea cursă.");
+      return;
+    }
+
+    const okCars = fleet.filter((c) => live[c.vin] && !live[c.vin].error).length;
+    const liveCars = fleet.filter(
+      (c) => live[c.vin]?.receivedAt && Date.now() - Date.parse(live[c.vin].receivedAt) <= LIVE_WINDOW_MS
+    ).length;
+
+    setBadge(liveCars ? `LIVE API • ${liveCars} în cursă` : "API conectat", true);
+    setHint(
+      fleet.length
+        ? `Conectat ca „${auth.ownerId}” • ${okCars}/${fleet.length} vehicule • actualizat ${new Date().toLocaleTimeString("ro-RO")}`
+        : `Conectat ca „${auth.ownerId}”. Se așteaptă prima cursă de pe telefon pentru a detecta automat șasiul.`
+    );
+  } catch (err) {
+    setBadge(err.kind === "auth" ? "Token respins" : "Eroare API", false);
+    setHint(err.message, true);
+    if (err.kind === "auth") {
+      connected = false;
+      updateConnectButton();
+    }
+  } finally {
+    ticking = false;
+  }
+}
+
+// ---------------------------------------------------------------- randare flotă
 function disposeScenes() {
   Object.keys(scenes).forEach((id) => {
     scenes[id].dispose();
     delete scenes[id];
   });
 }
-const STORAGE_KEY = "porsche_hecaton_fleet_v6";
 
-const defaultFleet = [
-  {
-    id: "car-1",
-    name: "Porsche 911 Turbo S",
-    deviceId: "phone-daniela-01",
-    color: "#38bdf8",
-    imageBase: "./assets/porsche-silver",
-    powertrain: "ice",
-    odometerKm: 14280,
-    oilIntervalKm: 15000,
-    timingBeltKm: 90000,
-    reports: [
-      { id: "rep-live-1", date: "2026-11-21 (Azi)", status: "live", duration: "În curs...", distance: "1.8 km", maxAlt: "+24.5 m" },
-      { id: "rep-2026-11-20", date: "2026-11-20", status: "done", duration: "24 min", distance: "8.7 km", maxAlt: "+42.0 m" },
-      { id: "rep-2026-11-19", date: "2026-11-19", status: "done", duration: "15 min", distance: "4.2 km", maxAlt: "+18.5 m" }
-    ]
-  },
-  {
-    id: "car-2",
-    name: "Porsche Taycan GTS",
-    deviceId: "phone-adina-02",
-    color: "#e11d48",
-    imageBase: "./assets/porsche-red",
-    powertrain: "ev",
-    odometerKm: 58400,
-    oilIntervalKm: 30000, // Revizie lichid frână / reducător
-    timingBeltKm: 90000, // Revizie majoră transmisie / baterie
-    reports: [
-      { id: "rep-live-2", date: "2026-11-21 (Azi)", status: "live", duration: "În curs...", distance: "1.2 km", maxAlt: "+19.2 m" },
-      { id: "rep-2026-11-20", date: "2026-11-20", status: "done", duration: "31 min", distance: "12.3 km", maxAlt: "+65.4 m" },
-      { id: "rep-2026-11-18", date: "2026-11-18", status: "done", duration: "19 min", distance: "5.9 km", maxAlt: "+21.0 m" }
-    ]
-  }
-];
-
-function loadFleet() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return JSON.parse(saved);
-  } catch (_) {}
-  return defaultFleet;
-}
-
-function saveFleet(fleet) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(fleet));
-}
-
-let fleet = loadFleet();
-
-const carImageCache = {};
-
-function loadCarImage(imageBase, onReady) {
-  if (carImageCache[imageBase]) {
-    if (onReady && carImageCache[imageBase].loaded) {
-      onReady(carImageCache[imageBase]);
-    }
-    return carImageCache[imageBase];
-  }
-
-  const entry = { img: null, resolvedUrl: null, loaded: false };
-  carImageCache[imageBase] = entry;
-
-  const extensions = imageBase.match(/\.(png|jpg|jpeg|webp)$/i)
-    ? [""]
-    : [".png", ".jpg", ".jpeg", ".webp"];
-
-  let attempt = 0;
-  function tryNext() {
-    if (attempt >= extensions.length) return;
-    const url = `${imageBase}${extensions[attempt++]}`;
-    const img = new Image();
-    img.onload = () => {
-      entry.img = img;
-      entry.resolvedUrl = url;
-      entry.loaded = true;
-      if (onReady) onReady(entry);
-    };
-    img.onerror = tryNext;
-    img.src = url;
-  }
-
-  tryNext();
-  return entry;
-}
-
-
-
-
-
-// ======================================================================
-//  RECOMANDĂRI & MENTENANȚĂ PREDICTIVĂ
-//  Intrare: mașina (kilometraj, intervale) + statistici agregate din senzori.
-//  (Aceeași logică există și în report.js, ca să nu avem fișier nou.)
-// ======================================================================
-const REC_LABELS = {
-  ice: { minor: "Schimb ulei", major: "Distribuție / revizie majoră" },
-  ev: { minor: "Lichid frână / reductor", major: "Revizie transmisie / baterie" }
-};
-
-function fmtKm(n) {
-  return Math.round(n).toLocaleString("ro-RO");
-}
-
-// Valori de test până când backend-ul trimite statisticile reale ale sesiunii.
-function mockSessionStats(car) {
-  const base = {
-    distanceKm: 6, roughKm: 0, roughPct: 0, peakVertG: 0.5, impacts: 0,
-    hardBrakes: 1, hardAccels: 1, maxLateralG: 0.3, rollBiasDeg: 0.3, pitchOnBrakeDeg: 2,
-    smoothVibPct: 1, idleMinutes: 1, idleVibRms: 0.02, stopGoPct: 10,
-    elevGainM: 15, elevLossM: 12, hasBaro: true, minPressure: 1010, pressureTrendHpaH: -0.5,
-    magMeanUT: 48, magStdUT: 4, magOutOfRangePct: 1
+function thumbFor(car, imgEl) {
+  const base = car.imageBase || "./assets/porsche-silver";
+  const candidates = /\.(png|jpe?g|webp)$/i.test(base) ? [base] : [`${base}.png`, `${base}.jpg`, `${base}.webp`];
+  let i = 0;
+  const next = () => {
+    if (i < candidates.length) imgEl.src = candidates[i++];
   };
-  const perCar = {
-    "car-1": { distanceKm: 8.7, roughKm: 1.3, roughPct: 15, hardBrakes: 6, maxLateralG: 0.62, pitchOnBrakeDeg: 3.1, elevGainM: 42, elevLossM: 38, minPressure: 1008.5, magMeanUT: 48.2 },
-    "car-2": { distanceKm: 12.3, roughKm: 2.4, roughPct: 20, peakVertG: 1.8, impacts: 1, rollBiasDeg: 2.4, elevGainM: 65, elevLossM: 60, magMeanUT: 48.2 }
-  };
-  return Object.assign({}, base, perCar[car.id] || {});
+  imgEl.onerror = next;
+  next();
 }
-
-function buildCarRecommendations(car, s) {
-  const isEv = car.powertrain ? car.powertrain === "ev" : /taycan|electric/i.test(car.name || "");
-  const L = REC_LABELS[isEv ? "ev" : "ice"];
-  const dist = Math.max(s.distanceKm || 0, 1);
-  const per10 = (n) => ((n || 0) / dist) * 10;
-  const odo = car.odometerKm || 0;
-
-  // Drum prost și trafic aglomerat scurtează intervalul efectiv de service (max ~20%)
-  const wear = 1 - Math.min(0.12, (s.roughPct || 0) / 200) - Math.min(0.08, (s.stopGoPct || 0) / 500);
-
-  const service = (step, w, lastKm) => {
-    const eff = Math.round(step * w);
-    const since = lastKm != null ? odo - lastKm : odo % step;
-    return { left: Math.max(0, eff - since), pct: Math.min(100, Math.round((since / eff) * 100)) };
-  };
-  const minor = service(car.oilIntervalKm || 15000, wear, car.lastOilKm);
-  const major = service(car.timingBeltKm || 90000, 1, car.lastMajorKm);
-
-  const items = [];
-  const add = (level, sensor, text, weight) => items.push({ level, sensor, text, weight });
-
-  // --- Kilometraj ---
-  if (minor.left <= 1500) {
-    add("danger", "Kilometraj", `${L.minor}: mai sunt aproximativ ${fmtKm(minor.left)} km până la termen.`, 90);
-  } else if (minor.left <= 3000) {
-    add("warn", "Kilometraj", `${L.minor} se apropie (peste ~${fmtKm(minor.left)} km). Poți programa din timp.`, 50);
-  }
-  if (major.left <= 5000) {
-    add("warn", "Kilometraj", `${L.major} în ~${fmtKm(major.left)} km.`, 55);
-  }
-  if (wear < 0.95) {
-    add("info", "Condiții", `Condiții solicitante recent: intervalul efectiv de service e scurtat cu ~${Math.round((1 - wear) * 100)}%.`, 20);
-  }
-
-  // --- Accelerometru: drum, suspensii, roți, frâne ---
-  if ((s.roughPct || 0) >= 5 || (s.roughKm || 0) >= 1) {
-    add("warn", "Accelerometru", `~${(s.roughKm || 0).toFixed(1)} km pe drum neasfaltat/denivelat. Merită o privire la suspensii, bucșe și presiunea din pneuri.`, 60);
-  }
-  if ((s.roughKmTotal || car.roughKmTotal || 0) >= 300) {
-    add("warn", "Accelerometru", "Rulaj cumulat mare pe drum prost: verifică amortizoarele și rotulele la următorul service.", 58);
-  }
-  if ((s.impacts || 0) >= 1 || (s.peakVertG || 0) >= 1.6) {
-    add("warn", "Accelerometru", "Șoc puternic detectat (groapă sau bordură?). Verifică jantele, flancul anvelopelor și geometria.", 65);
-  }
-  if (per10(s.hardBrakes) >= 4) {
-    add("warn", "Accelerometru", "Frânări apăsate frecvente: plăcuțele și discurile se uzează mai repede. Verifică-le la următoarea revizie.", 62);
-  }
-  if (per10(s.hardAccels) >= 4) {
-    add("info", "Accelerometru", isEv
-      ? "Accelerări bruște dese: consum mai mare și uzură mai rapidă a anvelopelor."
-      : "Accelerări bruște dese: consum mai mare, uzură mai rapidă a anvelopelor și a uleiului.", 30);
-  }
-  if ((s.maxLateralG || 0) >= 0.6) {
-    add("info", "Accelerometru", "Accelerații laterale mari în viraje: uzura anvelopelor pe margini; verifică presiunea și geometria.", 32);
-  }
-  if (Math.abs(s.rollBiasDeg || 0) >= 2) {
-    add("warn", "Accelerometru", "Caroseria pare înclinată constant într-o parte pe drum drept: presiune inegală în pneuri, geometrie sau arc obosit.", 52);
-  }
-  if ((s.pitchOnBrakeDeg || 0) >= 4) {
-    add("warn", "Accelerometru", "Boțul în frânare este accentuat: amortizoarele din față pot fi uzate.", 50);
-  }
-  if ((s.smoothVibPct || 0) >= 10) {
-    add("warn", "Accelerometru", "Vibrații constante pe asfalt bun: posibil dezechilibru la roți sau jantă deformată.", 54);
-  }
-  if (!isEv && (s.idleVibRms || 0) >= 0.08) {
-    add("warn", "Accelerometru", "Vibrații mai mari la ralanti: suporții motorului sau bujiile merită verificate.", 48);
-  }
-  if (!isEv && (s.idleMinutes || 0) >= 15) {
-    add("info", "Accelerometru", "Mult timp mers în gol: uleiul se degradează mai repede decât arată kilometrajul.", 22);
-  }
-  if ((s.stopGoPct || 0) >= 40) {
-    add("info", "Accelerometru", "Trafic aglomerat și curse scurte: solicitare mai mare pentru frâne și ulei/baterie.", 24);
-  }
-
-  // --- Barometru: relief, altitudine, vreme ---
-  if (s.hasBaro === false) {
-    add("info", "Barometru", "Telefonul nu are barometru: recomandările legate de relief nu sunt disponibile.", 10);
-  } else {
-    if ((s.elevLossM || 0) >= 250 && per10(s.hardBrakes) >= 2) {
-      add("warn", "Barometru", "Coborâri lungi cu frânări dese: plăcuțele și lichidul de frână se încălzesc. Folosește frâna de motor / regenerarea.", 56);
-    } else if ((s.elevGainM || 0) >= 300) {
-      add("info", "Barometru", isEv
-        ? "Urcări mari în sesiune: consum și solicitare termică mai mari pentru baterie."
-        : "Urcări mari în sesiune: solicitare mai mare pentru motor și sistemul de răcire.", 28);
-    }
-    if ((s.minPressure || 1013) <= 900) {
-      add("info", "Barometru", isEv
-        ? "Altitudine mare (~1000 m+): presiunea din pneuri se simte diferit; verific-o la coborâre."
-        : "Altitudine mare (~1000 m+): aer mai rar, ușoară pierdere de putere la motoarele atmosferice; verifică filtrul de aer dacă e murdar.", 26);
-    }
-    if ((s.pressureTrendHpaH || 0) <= -3) {
-      add("info", "Barometru", "Presiunea scade repede (front atmosferic): posibilă ploaie, aderență mai mică; verifică ștergătoarele și anvelopele.", 18);
-    }
-  }
-
-  // --- Magnetometru: câmp magnetic / interferențe ---
-  if ((s.magOutOfRangePct || 0) >= 10) {
-    add("warn", "Magnetometru", `Câmp magnetic perturbat (medie ~${(s.magMeanUT || 0).toFixed(0)} µT, normal 25–65). Mută telefonul de magneți/cabluri și recalibrează busola; dacă persistă, verifică instalația electrică.`, 40);
-  } else if ((s.magStdUT || 0) >= 12) {
-    add("info", "Magnetometru", "Câmp magnetic instabil: direcția (yaw) poate fi imprecisă. Recalibrează busola în „opt”.", 16);
-  }
-
-  items.sort((a, b) => b.weight - a.weight);
-
-  return {
-    odo,
-    bars: [
-      { label: L.minor, left: minor.left, pct: minor.pct },
-      { label: L.major, left: major.left, pct: major.pct }
-    ],
-    items
-  };
-}
-
-function renderRecommendations(rec, visible = 2) {
-  const barColor = (pct) => (pct >= 90 ? "#d9645a" : pct >= 75 ? "#d3a04a" : "rgba(148, 163, 184, 0.7)");
-  const row = (i) => `
-    <div class="rec-item ${i.level}">
-      <span class="rec-sensor-tag">${i.sensor}</span>
-      <span>${i.text}</span>
-    </div>`;
-
-  const top = rec.items.slice(0, visible).map(row).join("");
-  const rest = rec.items.slice(visible);
-  const more = rest.length
-    ? `<details><summary>încă ${rest.length} ${rest.length === 1 ? "observație" : "observații"}</summary>
-         <div class="rec-list">${rest.map(row).join("")}</div></details>`
-    : "";
-  const empty = rec.items.length ? "" : `<div class="rec-item"><span>Nimic de semnalat în această sesiune.</span></div>`;
-
-  const bars = rec.bars
-    .map(
-      (b) => `
-      <div class="service-item">
-        <div class="service-item-top">
-          <span>${b.label}</span>
-          <strong>în ${fmtKm(b.left)} km</strong>
-        </div>
-        <div class="progress-track">
-          <div class="progress-fill" style="width: ${b.pct}%; background: ${barColor(b.pct)};"></div>
-        </div>
-      </div>`
-    )
-    .join("");
-
-  return `
-    <div class="recommendations-box">
-      <div class="recommendations-header">
-        <h4>Recomandări &amp; Mentenanță Predictivă</h4>
-        <span class="km-badge">${fmtKm(rec.odo)} km total</span>
-      </div>
-      <div class="service-bars">${bars}</div>
-      <div class="rec-list">${top}${empty}</div>
-      ${more}
-    </div>`;
-}
-
-const liveSimState = {};
 
 function renderFleet() {
   disposeScenes();                       // <-- NOU (prima linie)
@@ -293,279 +510,83 @@ function renderFleet() {
   const grid = document.getElementById("fleet-grid");
   grid.innerHTML = "";
 
-  fleet.forEach((car, index) => {
-    const base = car.imageBase || car.imageUrl || "./assets/porsche-silver";
-    if (!liveSimState[car.id]) {
-      liveSimState[car.id] = {
-        t: index * 1.4,
-        rough: 0,
+  if (!fleet.length) {
+    grid.innerHTML = `<article class="card empty-fleet">
+      <h3>Nicio mașină în dashboard</h3>
+      <p class="muted">Vehiculele detectate în baza de date apar automat aici imediat ce se trimite telemetrie de pe telefon.</p>
+      <button type="button" id="reload-fleet-btn" class="btn-primary" style="margin-top: 0.75rem;">Caută vehicule în bază</button>
+    </article>`;
+    document.getElementById("reload-fleet-btn")?.addEventListener("click", () => {
+      pollingPaused = false;
+      connect();
+    });
+    return;
+  }
 
-      };
-    }
-
-    const rec = buildCarRecommendations(car, mockSessionStats(car));
-
+  fleet.forEach((car) => {
     const card = document.createElement("article");
     card.className = "car-card";
+    card.id = `card-${car.vin}`;
     card.innerHTML = `
       <div class="car-card-header">
         <div class="car-title-group">
-          <img id="thumb-${car.id}" alt="${car.name}" class="car-thumb-mini" />
+          <img alt="" class="car-thumb-mini" />
           <div>
-            <h3>${car.name}</h3>
-            <span class="muted">ID: ${car.deviceId}</span>
+            <h3>${escapeHtml(car.name)}</h3>
+            <span class="muted">VIN: ${escapeHtml(car.vin)}</span>
           </div>
         </div>
-        <span class="live-pill">● TRAIECTORIE 3D LIVE</span>
+        <div class="car-header-controls">
+          <span id="live-pill-${car.vin}" class="live-pill idle">● AȘTEPT DATE</span>
+          <button type="button" class="btn-delete-car" data-delete="${escapeHtml(car.vin)}" title="Șterge mașina din dashboard">✕ Șterge</button>
+        </div>
       </div>
 
       <div class="mini-map-box">
-        <div id="scene-${car.id}" class="scene3d"></div>
+        <div id="scene-${car.vin}" class="scene3d"></div>
         <div class="mini-map-overlay">
-          <span id="telemetry-pos-${car.id}">Poziție: X 0.0m, Y 0.0m</span>
-          <span id="telemetry-alt-${car.id}">Altitudine: +0.0m • Pitch: 0.0°</span>
+          <span id="telemetry-pos-${car.vin}">Aștept date de la API...</span>
+          <span id="telemetry-alt-${car.vin}"></span>
         </div>
       </div>
 
       <div class="reports-table-wrapper">
-        <h4>Rapoarte pe zile (Click pe un raport pentru detalii complete)</h4>
+        <h4>Rapoarte de cursă (click pe un raport pentru detalii)</h4>
         <table class="reports-table">
           <thead>
-            <tr>
-              <th>Data</th>
-              <th>Status</th>
-              <th>Durată</th>
-              <th>Distanță</th>
-              <th>Alt. Max</th>
-            </tr>
+            <tr><th>Început</th><th>Status</th><th>Durată</th><th>Distanță</th><th>Alt. Max</th></tr>
           </thead>
-          <tbody>
-            ${car.reports
-              .map(
-                (rep) => `
-              <tr data-car-id="${car.id}" data-report-id="${rep.id}">
-                <td><strong>${rep.date}</strong></td>
-                <td>
-                  ${
-                    rep.status === "live"
-                      ? `<span class="badge-active">● În desfășurare</span>`
-                      : `<span class="badge-done">Finalizat</span>`
-                  }
-                </td>
-                <td>${rep.duration}</td>
-                <td>${rep.distance}</td>
-                <td>${rep.maxAlt}</td>
-              </tr>
-            `
-              )
-              .join("")}
-          </tbody>
+          <tbody id="reports-${car.vin}"></tbody>
         </table>
       </div>
 
-      ${renderRecommendations(rec, 2)}
+      <div id="recs-${car.vin}"></div>
     `;
-
     grid.appendChild(card);
+    thumbFor(car, card.querySelector(".car-thumb-mini"));
 
-        scenes[car.id] = createCarScene(card.querySelector(`#scene-${car.id}`), {
+    scenes[car.vin] = createCarScene(card.querySelector(`#scene-${car.vin}`), {
       trailColor: car.color,
       bodyColor: bodyColorFor(car),
-      zoom: false,      // scroll-ul paginii nu mai e capturat de scenă
+      zoom: false,
       maxPoints: 700
     });
 
-    loadCarImage(base, (asset) => {
-      const thumb = document.getElementById(`thumb-${car.id}`);
-      if (thumb && asset.resolvedUrl) thumb.src = asset.resolvedUrl;
-    });
+    renderReportsAndRecs(car);
+    if (live[car.vin]?.points?.length) drawLive(car);
+    else updateOverlay(car);
   });
 
-  document.querySelectorAll(".reports-table tbody tr").forEach((row) => {
-    row.addEventListener("click", () => {
-      const carId = row.getAttribute("data-car-id");
-      const reportId = row.getAttribute("data-report-id");
-      const selectedCar = fleet.find((c) => c.id === carId);
-      if (selectedCar) {
-        const base = selectedCar.imageBase || selectedCar.imageUrl || "./assets/porsche-silver";
-        const asset = carImageCache[base];
-        sessionStorage.setItem(
-          "selected_report_context",
-          JSON.stringify({
-            car: selectedCar,
-            reportId,
-            resolvedUrl: asset ? asset.resolvedUrl : null
-          })
-        );
-        window.location.href = `./report.html?car=${encodeURIComponent(carId)}&report=${encodeURIComponent(reportId)}`;
-      }
-    });
-  });
-}
-
-
-const modal = document.getElementById("add-car-modal");
-document.getElementById("add-car-btn").addEventListener("click", () => modal.classList.remove("hidden"));
-document.getElementById("cancel-modal-btn").addEventListener("click", () => modal.classList.add("hidden"));
-
-document.getElementById("add-car-form").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const name = document.getElementById("car-name-input").value.trim();
-  const deviceId = document.getElementById("car-device-input").value.trim();
-  const imageBase = document.getElementById("car-image-input").value;
-  const color = document.getElementById("car-color-input").value;
-
-  const newCar = {
-    id: `car-${Date.now()}`,
-    name,
-    deviceId,
-    imageBase,
-    color,
-    powertrain: /taycan|electric/i.test(name) ? "ev" : "ice",
-    odometerKm: 8500,
-    oilIntervalKm: 15000,
-    timingBeltKm: 90000,
-    reports: [
-      {
-        id: `rep-live-${Date.now()}`,
-        date: "2026-11-21 (Azi)",
-        status: "live",
-        duration: "În curs...",
-        distance: "0.3 km",
-        maxAlt: "+4.2 m"
-      }
-    ]
-  };
-
-  fleet.push(newCar);
-  saveFleet(fleet);
-  modal.classList.add("hidden");
-  e.target.reset();
-  renderFleet();
-});
-
-/* ------------------------------------------------------------------ */
-/*  Date reale din backend (Azure Functions)                          */
-/* ------------------------------------------------------------------ */
-// config.js (copiat din config.example.js): apiBaseUrl, apiToken (opțional), pollIntervalMs.
-// Pentru fiecare mașină citim ultima stare a telefonului cu deviceId-ul ei (seria de șasiu / VIN).
-// Dacă nu avem API sau telefonul nu a trimis nimic, cardul rămâne pe simulare.
-const API = window.APP_CONFIG || {};
-const API_BASE = (API.apiBaseUrl || "").replace(/\/+$/, "");
-const POLL_MS = Math.max(500, API.pollIntervalMs || 1000);
-const LIVE_STALE_MS = 2 * 60 * 1000; // o stare mai veche de 2 minute nu mai e „live”
-const liveApi = {}; // carId -> { active, sessionId, lastTs, loaded }
-
-async function apiGet(path) {
-  const headers = API.apiToken ? { Authorization: `Bearer ${API.apiToken}` } : {};
-  const res = await fetch(`${API_BASE}${path}`, { headers });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`${res.status} ${path}`);
-  return res.json();
-}
-
-const roughOf = (advice) => (advice && /rough|pothole/i.test(advice) ? 1 : 0);
-
-function showLiveTelemetry(car, p, pitch, extra = "") {
-  const posEl = document.getElementById(`telemetry-pos-${car.id}`);
-  const altEl = document.getElementById(`telemetry-alt-${car.id}`);
-  if (posEl) posEl.textContent = `Poziție: X ${p.x.toFixed(1)}m, Y ${p.y.toFixed(1)}m${extra}`;
-  if (altEl) altEl.textContent = `Altitudine: ${p.z >= 0 ? "+" : ""}${p.z.toFixed(1)}m • Pitch: ${(pitch ?? 0).toFixed(1)}°`;
-}
-
-async function pollCar(car) {
-  const scene = scenes[car.id];
-  if (!scene || !car.deviceId) return;
-  const live = (liveApi[car.id] ||= { active: false, sessionId: null, lastTs: null, loaded: false });
-
-  const st = await apiGet(`/devices/${encodeURIComponent(car.deviceId)}/state`);
-  const pos = st && st.position;
-  const fresh = st && Date.now() - Date.parse(st.timestamp) < LIVE_STALE_MS;
-  if (!pos || pos.x == null || pos.y == null || !fresh) {
-    // fără GPS (x/y lipsesc) sau date vechi: nu avem traseu de desenat
-    if (live.active) {
-      live.active = false;
-      scene.clear();
-    }
-    return;
-  }
-
-  // cursă nouă sau scenă recreată: încărcăm tot traseul de până acum
-  if (!live.active || !live.loaded || st.sessionId !== live.sessionId) {
-    live.active = true;
-    live.sessionId = st.sessionId;
-    live.loaded = true;
-    live.lastTs = null;
-    scene.clear();
-    try {
-      const track = await apiGet(`/sessions/${encodeURIComponent(st.sessionId)}/track?points=700`);
-      const pts = (track?.points || [])
-        .filter((q) => q.x != null && q.y != null)
-        .map((q) => ({ x: q.x, y: q.y, z: q.altRelM ?? 0, rough: roughOf(q.advice) }));
-      if (pts.length) {
-        scene.setPath(pts);
-        scene.setCarAt(pts.length - 1, true);
-        live.lastTs = track.points[track.points.length - 1].t;
-      }
-    } catch (_) {
-      /* traseul complet e un bonus; continuăm cu punctele live */
-    }
-  }
-
-  if (st.timestamp === live.lastTs) return;
-  live.lastTs = st.timestamp;
-  const p = { x: pos.x, y: pos.y, z: pos.z ?? st.altitudeRel?.value ?? 0, rough: roughOf(st.advice) };
-  scene.pushPoint(p);
-  scene.setCar(p);
-  const acc = st.gps?.accuracy != null ? ` (GPS ±${Math.round(st.gps.accuracy)}m)` : "";
-  showLiveTelemetry(car, p, st.orientation?.pitch, acc);
-}
-
-async function pollLoop() {
-  await Promise.all(
-    fleet.map((car) =>
-      pollCar(car).catch(() => {
-        /* API indisponibil (CORS, rețea, token): cardul rămâne pe simulare */
-      })
-    )
+  grid.querySelectorAll("[data-delete]").forEach((btn) =>
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      removeCarFromFleet(btn.dataset.delete);
+    })
   );
-  setTimeout(pollLoop, POLL_MS);
 }
 
-function tickSimulation() {
-  fleet.forEach((car) => {
-    const scene = scenes[car.id];
-    const state = liveSimState[car.id];
-    if (!scene || !state) return;
-    if (liveApi[car.id]?.active) return; // are date reale: nu mai simulăm
-
-    state.t += 0.018;
-
-    const phase = state.t % (Math.PI * 2);
-    const onRoughSegment = phase > 2.1 && phase < 3.4;
-    state.rough += ((onRoughSegment ? 1 : 0) - state.rough) * 0.08;
-    const rough = state.rough;
-
-    const x = Math.cos(state.t) * 210 + Math.sin(state.t * 2) * 45;
-    const y = Math.sin(state.t) * 105;
-    const z = Math.max(0, Math.sin(state.t * 1.4) * 24 + 12);
-    const pitch = (Math.cos(state.t * 1.4) * 8.5 + rough * Math.sin(state.t * 30) * 0.6).toFixed(1);
-
-    // Când vin date reale din backend, doar aceste două apeluri înlocuiesc simularea:
-    scene.pushPoint({ x, y, z, rough });
-    scene.setCar({ x, y, z, rough });
-
-    const posEl = document.getElementById(`telemetry-pos-${car.id}`);
-    const altEl = document.getElementById(`telemetry-alt-${car.id}`);
-    if (posEl) posEl.textContent = rough > 0.5 ? "Suprafață: drum neasfaltat (vibrații)" : `Poziție: X ${x.toFixed(1)}m, Y ${y.toFixed(1)}m`;
-    if (altEl) altEl.textContent = `Altitudine: +${z.toFixed(1)}m • Pitch: ${pitch}°`;
-  });
-
-  requestAnimationFrame(tickSimulation);
-}
-
+// ---------------------------------------------------------------- pornire
+syncVinSelector();
 renderFleet();
-tickSimulation();
-if (API_BASE) pollLoop();
-
-renderFleet();
+connect();
+setInterval(() => tick(), pollMs);

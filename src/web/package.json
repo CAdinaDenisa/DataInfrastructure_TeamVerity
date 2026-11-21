@@ -7,7 +7,7 @@
   "start": "http-server . -p 5173 -c-1",
   "vendor": "node scripts/vendor.mjs",
   "postinstall": "node scripts/vendor.mjs",
-  "check": "node --check app.js && node --check report.js && node --check scene3d.js",
+  "check": "node --check app.js && node --check api.js && node --check recs.js && node --check report.js && node --check scene3d.js",
   "build": "node scripts/vendor.mjs && node scripts/build.mjs"
 },
   "dependencies": {
