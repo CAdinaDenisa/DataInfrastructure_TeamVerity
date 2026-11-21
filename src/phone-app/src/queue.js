@@ -86,6 +86,18 @@ export function reject(eventId, reason) {
   });
 }
 
+// Șterge evenimentele care nu mai pot fi trimise (ex. de la teste, pentru o mașină care nu mai există).
+// Doar la cererea explicită a utilizatorului, din Diagnostic.
+export function removeWhere(predicate) {
+  return serial(async () => {
+    const before = queue.length;
+    queue = queue.filter((e) => !predicate(e));
+    await persist();
+    notify();
+    return before - queue.length;
+  });
+}
+
 export function clearRejected() {
   return serial(async () => {
     rejected = [];
