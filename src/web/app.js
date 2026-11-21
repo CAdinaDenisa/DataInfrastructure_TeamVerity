@@ -1,4 +1,4 @@
-const STORAGE_KEY = "porsche_hecaton_fleet_v4";
+const STORAGE_KEY = "porsche_hecaton_fleet_v6";
 
 const defaultFleet = [
   {
@@ -7,6 +7,9 @@ const defaultFleet = [
     deviceId: "phone-daniela-01",
     color: "#38bdf8",
     imageBase: "./assets/porsche-silver",
+    odometerKm: 14280,
+    oilIntervalKm: 15000,
+    timingBeltKm: 90000,
     reports: [
       { id: "rep-live-1", date: "2026-11-21 (Azi)", status: "live", duration: "În curs...", distance: "1.8 km", maxAlt: "+24.5 m" },
       { id: "rep-2026-11-20", date: "2026-11-20", status: "done", duration: "24 min", distance: "8.7 km", maxAlt: "+42.0 m" },
@@ -19,6 +22,9 @@ const defaultFleet = [
     deviceId: "phone-adina-02",
     color: "#e11d48",
     imageBase: "./assets/porsche-red",
+    odometerKm: 58400,
+    oilIntervalKm: 30000, // Revizie lichid frână / reducător
+    timingBeltKm: 90000,  // Revizie majoră transmisie / baterie
     reports: [
       { id: "rep-live-2", date: "2026-11-21 (Azi)", status: "live", duration: "În curs...", distance: "1.2 km", maxAlt: "+19.2 m" },
       { id: "rep-2026-11-20", date: "2026-11-20", status: "done", duration: "31 min", distance: "12.3 km", maxAlt: "+65.4 m" },
@@ -41,97 +47,18 @@ function saveFleet(fleet) {
 
 let fleet = loadFleet();
 
-// Flood Fill din marginile pozei: elimină DOAR fundalul exterior (alb, gri sau bej),
-// fără să atingă reflexiile luminoase de pe interiorul mașinii!
-function makeCleanCarSprite(img) {
-  const c = document.createElement("canvas");
-  const maxW = 360;
-  const scale = img.naturalWidth > maxW ? maxW / img.naturalWidth : 1;
-  c.width = Math.round((img.naturalWidth || 360) * scale);
-  c.height = Math.round((img.naturalHeight || 220) * scale);
+const carImageCache = {};
 
-  const ctx = c.getContext("2d");
-  ctx.drawImage(img, 0, 0, c.width, c.height);
-
-  try {
-    const w = c.width;
-    const h = c.height;
-    const imgData = ctx.getImageData(0, 0, w, h);
-    const d = imgData.data;
-    const visited = new Uint8Array(w * h);
-    const queue = new Int32Array(w * h);
-    let head = 0;
-    let tail = 0;
-
-    // Verifică dacă un pixel seamănă cu fundalul deschis/neutru (nu e roșu aprins sau negru intens)
-    function isBackgroundPixel(idx) {
-      const p = idx * 4;
-      const r = d[p], g = d[p + 1], b = d[p + 2], a = d[p + 3];
-      if (a < 20) return true;
-      const maxC = Math.max(r, g, b);
-      const minC = Math.min(r, g, b);
-      const saturation = maxC === 0 ? 0 : (maxC - minC) / maxC;
-      // Fundalul din ambele poze (alb la 911 sau gri-bej deschis la Taycan) are luminozitate > 125 și saturație mică (< 0.28)
-      return maxC > 125 && saturation < 0.28;
+function loadCarImage(imageBase, onReady) {
+  if (carImageCache[imageBase]) {
+    if (onReady && carImageCache[imageBase].loaded) {
+      onReady(carImageCache[imageBase]);
     }
-
-    // Pornim flood-fill-ul din toate marginile exterioare ale imaginii
-    for (let x = 0; x < w; x++) {
-      const top = x;
-      const bottom = (h - 1) * w + x;
-      if (!visited[top] && isBackgroundPixel(top)) { visited[top] = 1; queue[tail++] = top; }
-      if (!visited[bottom] && isBackgroundPixel(bottom)) { visited[bottom] = 1; queue[tail++] = bottom; }
-    }
-    for (let y = 0; y < h; y++) {
-      const left = y * w;
-      const right = y * w + (w - 1);
-      if (!visited[left] && isBackgroundPixel(left)) { visited[left] = 1; queue[tail++] = left; }
-      if (!visited[right] && isBackgroundPixel(right)) { visited[right] = 1; queue[tail++] = right; }
-    }
-
-    while (head < tail) {
-      const curr = queue[head++];
-      d[curr * 4 + 3] = 0; // Facem pixelul exterior transparent
-
-      const cx = curr % w;
-      const cy = (curr - cx) / w;
-
-      if (cx > 0) {
-        const n = curr - 1;
-        if (!visited[n] && isBackgroundPixel(n)) { visited[n] = 1; queue[tail++] = n; }
-      }
-      if (cx < w - 1) {
-        const n = curr + 1;
-        if (!visited[n] && isBackgroundPixel(n)) { visited[n] = 1; queue[tail++] = n; }
-      }
-      if (cy > 0) {
-        const n = curr - w;
-        if (!visited[n] && isBackgroundPixel(n)) { visited[n] = 1; queue[tail++] = n; }
-      }
-      if (cy < h - 1) {
-        const n = curr + w;
-        if (!visited[n] && isBackgroundPixel(n)) { visited[n] = 1; queue[tail++] = n; }
-      }
-    }
-
-    ctx.putImageData(imgData, 0, 0);
-  } catch (_) {}
-
-  return c;
-}
-
-const processedCarCache = {};
-
-function loadCarAsset(imageBase, onReady) {
-  if (processedCarCache[imageBase]) {
-    if (onReady && processedCarCache[imageBase].resolvedUrl) {
-      onReady(processedCarCache[imageBase]);
-    }
-    return processedCarCache[imageBase];
+    return carImageCache[imageBase];
   }
 
-  const entry = { spriteCanvas: null, spriteDataUrl: null, resolvedUrl: null };
-  processedCarCache[imageBase] = entry;
+  const entry = { img: null, resolvedUrl: null, loaded: false };
+  carImageCache[imageBase] = entry;
 
   const extensions = imageBase.match(/\.(png|jpg|jpeg|webp)$/i)
     ? [""]
@@ -143,10 +70,9 @@ function loadCarAsset(imageBase, onReady) {
     const url = `${imageBase}${extensions[attempt++]}`;
     const img = new Image();
     img.onload = () => {
-      const sprite = makeCleanCarSprite(img);
-      entry.spriteCanvas = sprite;
-      entry.spriteDataUrl = sprite.toDataURL("image/png");
+      entry.img = img;
       entry.resolvedUrl = url;
+      entry.loaded = true;
       if (onReady) onReady(entry);
     };
     img.onerror = tryNext;
@@ -166,22 +92,22 @@ function projectIsoMini(x, y, z, width, height) {
   };
 }
 
-function drawPorscheOnMap(ctx, sx, sy, slopeAngleRad, goingLeft, imageBase, fallbackColor, altText) {
-  const asset = processedCarCache[imageBase];
+function drawPorscheOnMap(ctx, sx, sy, slopeAngleRad, goingLeft, imageBase, fallbackColor, altText, isRoughRoad) {
+  const asset = carImageCache[imageBase];
 
   ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
   ctx.beginPath();
   ctx.ellipse(sx, sy + 14, 28, 7, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  if (asset && asset.spriteCanvas) {
+  if (asset && asset.loaded && asset.img) {
     ctx.save();
     ctx.translate(sx, sy - 6);
     ctx.rotate(slopeAngleRad);
     if (goingLeft) {
       ctx.scale(-1, 1);
     }
-    ctx.drawImage(asset.spriteCanvas, -44, -26, 88, 52);
+    ctx.drawImage(asset.img, -44, -26, 88, 52);
     ctx.restore();
   } else {
     ctx.fillStyle = fallbackColor;
@@ -190,9 +116,63 @@ function drawPorscheOnMap(ctx, sx, sy, slopeAngleRad, goingLeft, imageBase, fall
     ctx.fill();
   }
 
-  ctx.fillStyle = "#f8fafc";
+  ctx.fillStyle = isRoughRoad ? "#fbbf24" : "#f8fafc";
   ctx.font = "bold 11px Segoe UI, sans-serif";
-  ctx.fillText(altText, sx - 20, sy - 30);
+  ctx.fillText(isRoughRoad ? `${altText} ⚠ Drum forestier` : altText, sx - 24, sy - 30);
+}
+
+// Generează recomandările automate pe baza senzorilor și kilometrajului
+function buildCarRecommendations(car) {
+  const odo = car.odometerKm || 12000;
+  const oilStep = car.oilIntervalKm || 15000;
+  const distSinceOil = odo % oilStep;
+  const kmToOil = oilStep - distSinceOil;
+  const oilPct = Math.min(100, Math.round((distSinceOil / oilStep) * 100));
+
+  const beltStep = car.timingBeltKm || 90000;
+  const distSinceBelt = odo % beltStep;
+  const kmToBelt = beltStep - distSinceBelt;
+  const beltPct = Math.min(100, Math.round((distSinceBelt / beltStep) * 100));
+
+  const items = [];
+
+  if (kmToOil <= 1500) {
+    items.push({
+      level: "danger",
+      sensor: "Kilometraj",
+      text: `Schimb ulei & filtru necesar în ${kmToOil} km (rulaj: ${odo.toLocaleString("ro-RO")} km).`
+    });
+  } else {
+    items.push({
+      level: "ok",
+      sensor: "Kilometraj",
+      text: `Ulei motor în parametri — următorul schimb peste ${kmToOil.toLocaleString("ro-RO")} km.`
+    });
+  }
+
+  // Scenariu detectat din Accelerometru (drum forestier / vibrații)
+  items.push({
+    level: "warn",
+    sensor: "Accelerometru",
+    text: "Segment drum forestier detectat (vibrații > 0.42g) — recomandată verificarea suspensiilor și bucșelor."
+  });
+
+  // Scenariu detectat din Barometru (urcare/coborâre)
+  if (car.id === "car-1") {
+    items.push({
+      level: "warn",
+      sensor: "Barometru",
+      text: "Diferență de nivel +42m cu frânări repetate — verifică uzura plăcuțelor de frână."
+    });
+  } else {
+    items.push({
+      level: "ok",
+      sensor: "Magnetometru",
+      text: "Câmp magnetic stabil (48.2 µT) — fără anomalii electrice sau interferențe pe sistem."
+    });
+  }
+
+  return { odo, kmToOil, oilPct, kmToBelt, beltPct, items };
 }
 
 const liveSimState = {};
@@ -209,6 +189,10 @@ function renderFleet() {
         trail: []
       };
     }
+
+    const rec = buildCarRecommendations(car);
+    const oilBarColor = rec.oilPct > 85 ? "#ef4444" : rec.oilPct > 65 ? "#f59e0b" : "#10b981";
+    const beltBarColor = rec.beltPct > 85 ? "#ef4444" : "#38bdf8";
 
     const card = document.createElement("article");
     card.className = "car-card";
@@ -267,13 +251,56 @@ function renderFleet() {
           </tbody>
         </table>
       </div>
+
+      <!-- SECȚIUNEA RECOMANDĂRI DEDUSE DIN SENZORI -->
+      <div class="recommendations-box">
+        <div class="recommendations-header">
+          <h4>Recomandări &amp; Mentenanță Predictivă</h4>
+          <span class="km-badge">${rec.odo.toLocaleString("ro-RO")} km total</span>
+        </div>
+
+        <div class="service-bars">
+          <div class="service-item">
+            <div class="service-item-top">
+              <span>Schimb ulei</span>
+              <strong>în ${rec.kmToOil.toLocaleString("ro-RO")} km</strong>
+            </div>
+            <div class="progress-track">
+              <div class="progress-fill" style="width: ${rec.oilPct}%; background: ${oilBarColor};"></div>
+            </div>
+          </div>
+
+          <div class="service-item">
+            <div class="service-item-top">
+              <span>Distribuție / Revizie majoră</span>
+              <strong>în ${rec.kmToBelt.toLocaleString("ro-RO")} km</strong>
+            </div>
+            <div class="progress-track">
+              <div class="progress-fill" style="width: ${rec.beltPct}%; background: ${beltBarColor};"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="rec-list">
+          ${rec.items
+            .map(
+              (item) => `
+            <div class="rec-item ${item.level}">
+              <span class="rec-sensor-tag">${item.sensor}</span>
+              <span>${item.text}</span>
+            </div>
+          `
+            )
+            .join("")}
+        </div>
+      </div>
     `;
 
     grid.appendChild(card);
 
-    loadCarAsset(base, (asset) => {
+    loadCarImage(base, (asset) => {
       const thumb = document.getElementById(`thumb-${car.id}`);
-      if (thumb && asset.spriteDataUrl) thumb.src = asset.spriteDataUrl;
+      if (thumb && asset.resolvedUrl) thumb.src = asset.resolvedUrl;
     });
   });
 
@@ -284,14 +311,13 @@ function renderFleet() {
       const selectedCar = fleet.find((c) => c.id === carId);
       if (selectedCar) {
         const base = selectedCar.imageBase || selectedCar.imageUrl || "./assets/porsche-silver";
-        const asset = processedCarCache[base];
+        const asset = carImageCache[base];
         sessionStorage.setItem(
           "selected_report_context",
           JSON.stringify({
             car: selectedCar,
             reportId,
-            resolvedUrl: asset ? asset.resolvedUrl : null,
-            spriteDataUrl: asset ? asset.spriteDataUrl : null
+            resolvedUrl: asset ? asset.resolvedUrl : null
           })
         );
         window.location.href = `./report.html?car=${encodeURIComponent(carId)}&report=${encodeURIComponent(reportId)}`;
@@ -309,16 +335,22 @@ function animateMiniMaps() {
     const base = car.imageBase || car.imageUrl || "./assets/porsche-silver";
     state.t += 0.018;
 
+    const phase = state.t % (Math.PI * 2);
+    // Zona de "drum forestier" este între unghiul 2.1 și 3.4 radiani
+    const isRoughRoad = phase > 2.1 && phase < 3.4;
+    const vibrationZ = isRoughRoad ? Math.sin(state.t * 38) * 1.8 : 0;
+
     const x = Math.cos(state.t) * 210 + Math.sin(state.t * 2) * 45;
     const y = Math.sin(state.t) * 105;
-    const z = Math.max(0, Math.sin(state.t * 1.4) * 24 + 12);
-    const pitch = (Math.cos(state.t * 1.4) * 8.5).toFixed(1);
+    const z = Math.max(0, Math.sin(state.t * 1.4) * 24 + 12 + vibrationZ);
+    const pitch = (Math.cos(state.t * 1.4) * 8.5 + (isRoughRoad ? Math.sin(state.t * 30) * 2.4 : 0)).toFixed(1);
 
-    state.trail.push({ x, y, z });
+    state.trail.push({ x, y, z, isRoughRoad });
     if (state.trail.length > 2500) state.trail.shift();
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // Grid 3D
     ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
     ctx.lineWidth = 1;
     for (let gx = -260; gx <= 260; gx += 52) {
@@ -339,6 +371,7 @@ function animateMiniMaps() {
     }
 
     if (state.trail.length > 1) {
+      // Umbra la sol
       ctx.strokeStyle = "rgba(148, 163, 184, 0.2)";
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -349,11 +382,12 @@ function animateMiniMaps() {
       });
       ctx.stroke();
 
+      // Stâlpi verticali
       state.trail.forEach((pt, i) => {
         if (i % 12 === 0) {
           const g = projectIsoMini(pt.x, pt.y, 0, canvas.width, canvas.height);
           const e = projectIsoMini(pt.x, pt.y, pt.z, canvas.width, canvas.height);
-          ctx.strokeStyle = "rgba(56, 189, 248, 0.24)";
+          ctx.strokeStyle = pt.isRoughRoad ? "rgba(245, 158, 11, 0.38)" : "rgba(56, 189, 248, 0.24)";
           ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.moveTo(g.sx, g.sy);
@@ -362,15 +396,20 @@ function animateMiniMaps() {
         }
       });
 
-      ctx.strokeStyle = car.color;
-      ctx.lineWidth = 3.2;
-      ctx.beginPath();
-      state.trail.forEach((pt, i) => {
-        const e = projectIsoMini(pt.x, pt.y, pt.z, canvas.width, canvas.height);
-        if (i === 0) ctx.moveTo(e.sx, e.sy);
-        else ctx.lineTo(e.sx, e.sy);
-      });
-      ctx.stroke();
+      // Desenăm traseul pe segmente: normal (culoarea mașinii) vs drum forestier (portocaliu)
+      for (let i = 1; i < state.trail.length; i++) {
+        const pPrev = state.trail[i - 1];
+        const pCurr = state.trail[i];
+        const e1 = projectIsoMini(pPrev.x, pPrev.y, pPrev.z, canvas.width, canvas.height);
+        const e2 = projectIsoMini(pCurr.x, pCurr.y, pCurr.z, canvas.width, canvas.height);
+
+        ctx.strokeStyle = pCurr.isRoughRoad ? "#f59e0b" : car.color;
+        ctx.lineWidth = pCurr.isRoughRoad ? 4 : 3.2;
+        ctx.beginPath();
+        ctx.moveTo(e1.sx, e1.sy);
+        ctx.lineTo(e2.sx, e2.sy);
+        ctx.stroke();
+      }
 
       const currPt = state.trail[state.trail.length - 1];
       const prevPt = state.trail[state.trail.length - 2];
@@ -378,7 +417,7 @@ function animateMiniMaps() {
       const prevScreen = projectIsoMini(prevPt.x, prevPt.y, prevPt.z, canvas.width, canvas.height);
       const groundScreen = projectIsoMini(currPt.x, currPt.y, 0, canvas.width, canvas.height);
 
-      ctx.strokeStyle = "#38bdf8";
+      ctx.strokeStyle = currPt.isRoughRoad ? "#f59e0b" : "#38bdf8";
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
       ctx.moveTo(groundScreen.sx, groundScreen.sy);
@@ -392,12 +431,12 @@ function animateMiniMaps() {
       const rawSlope = Math.atan2(dy, Math.abs(dx) || 0.01);
       const slopeAngle = Math.max(-0.48, Math.min(0.48, goingLeft ? -rawSlope : rawSlope));
 
-      drawPorscheOnMap(ctx, currScreen.sx, currScreen.sy, slopeAngle, goingLeft, base, car.color, `+${z.toFixed(1)}m`);
+      drawPorscheOnMap(ctx, currScreen.sx, currScreen.sy, slopeAngle, goingLeft, base, car.color, `+${z.toFixed(1)}m`, currPt.isRoughRoad);
     }
 
     const posEl = document.getElementById(`telemetry-pos-${car.id}`);
     const altEl = document.getElementById(`telemetry-alt-${car.id}`);
-    if (posEl) posEl.textContent = `Poziție: X ${x.toFixed(1)}m, Y ${y.toFixed(1)}m`;
+    if (posEl) posEl.textContent = isRoughRoad ? "⚠ Suprafață: Drum forestier (vibrații)" : `Poziție: X ${x.toFixed(1)}m, Y ${y.toFixed(1)}m`;
     if (altEl) altEl.textContent = `Altitudine: +${z.toFixed(1)}m • Pitch: ${pitch}°`;
   });
 
@@ -421,6 +460,9 @@ document.getElementById("add-car-form").addEventListener("submit", (e) => {
     deviceId,
     imageBase,
     color,
+    odometerKm: 8500,
+    oilIntervalKm: 15000,
+    timingBeltKm: 90000,
     reports: [
       {
         id: `rep-live-${Date.now()}`,

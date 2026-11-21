@@ -8,14 +8,22 @@ const context = rawContext
         deviceId: "phone-daniela-01",
         color: "#38bdf8",
         imageBase: "./assets/porsche-silver",
-        reports: [{ id: "rep-demo", date: "2026-11-21", status: "done", duration: "24 min", distance: "8.7 km", maxAlt: "+42.0 m" }]
+        reports: [
+          {
+            id: "rep-demo",
+            date: "2026-11-21",
+            status: "done",
+            duration: "24 min",
+            distance: "8.7 km",
+            maxAlt: "+42.0 m"
+          }
+        ]
       },
       reportId: "rep-demo",
-      resolvedUrl: null,
-      spriteDataUrl: null
+      resolvedUrl: null
     };
 
-const { car, reportId, resolvedUrl, spriteDataUrl } = context;
+const { car, reportId, resolvedUrl } = context;
 const report = car.reports.find((r) => r.id === reportId) || car.reports[0];
 
 document.getElementById("report-title").textContent = `${car.name} — Raport ${report.date}`;
@@ -26,71 +34,10 @@ document.getElementById("car-device-tag").textContent = car.deviceId;
 const badgeEl = document.getElementById("report-badge");
 badgeEl.textContent = report.status === "live" ? "● Raport în desfășurare (LIVE)" : "Raport Finalizat";
 
-function makeCleanCarSprite(img) {
-  const c = document.createElement("canvas");
-  const maxW = 360;
-  const scale = img.naturalWidth > maxW ? maxW / img.naturalWidth : 1;
-  c.width = Math.round((img.naturalWidth || 360) * scale);
-  c.height = Math.round((img.naturalHeight || 220) * scale);
-
-  const ctx = c.getContext("2d");
-  ctx.drawImage(img, 0, 0, c.width, c.height);
-
-  try {
-    const w = c.width;
-    const h = c.height;
-    const imgData = ctx.getImageData(0, 0, w, h);
-    const d = imgData.data;
-    const visited = new Uint8Array(w * h);
-    const queue = new Int32Array(w * h);
-    let head = 0;
-    let tail = 0;
-
-    function isBackgroundPixel(idx) {
-      const p = idx * 4;
-      const r = d[p], g = d[p + 1], b = d[p + 2], a = d[p + 3];
-      if (a < 20) return true;
-      const maxC = Math.max(r, g, b);
-      const minC = Math.min(r, g, b);
-      const saturation = maxC === 0 ? 0 : (maxC - minC) / maxC;
-      return maxC > 125 && saturation < 0.28;
-    }
-
-    for (let x = 0; x < w; x++) {
-      const top = x;
-      const bottom = (h - 1) * w + x;
-      if (!visited[top] && isBackgroundPixel(top)) { visited[top] = 1; queue[tail++] = top; }
-      if (!visited[bottom] && isBackgroundPixel(bottom)) { visited[bottom] = 1; queue[tail++] = bottom; }
-    }
-    for (let y = 0; y < h; y++) {
-      const left = y * w;
-      const right = y * w + (w - 1);
-      if (!visited[left] && isBackgroundPixel(left)) { visited[left] = 1; queue[tail++] = left; }
-      if (!visited[right] && isBackgroundPixel(right)) { visited[right] = 1; queue[tail++] = right; }
-    }
-
-    while (head < tail) {
-      const curr = queue[head++];
-      d[curr * 4 + 3] = 0;
-      const cx = curr % w;
-      const cy = (curr - cx) / w;
-      if (cx > 0 && !visited[curr - 1] && isBackgroundPixel(curr - 1)) { visited[curr - 1] = 1; queue[tail++] = curr - 1; }
-      if (cx < w - 1 && !visited[curr + 1] && isBackgroundPixel(curr + 1)) { visited[curr + 1] = 1; queue[tail++] = curr + 1; }
-      if (cy > 0 && !visited[curr - w] && isBackgroundPixel(curr - w)) { visited[curr - w] = 1; queue[tail++] = curr - w; }
-      if (cy < h - 1 && !visited[curr + w] && isBackgroundPixel(curr + w)) { visited[curr + w] = 1; queue[tail++] = curr + w; }
-    }
-
-    ctx.putImageData(imgData, 0, 0);
-  } catch (_) {}
-
-  return c;
-}
-
-let spriteCanvas = null;
+let loadedCarImg = null;
 const photoEl = document.getElementById("car-photo");
 
-// 1. Pentru poza mare din stânga-sus folosim imaginea ORIGINALĂ (ne-decupată, în stil showroom full-bleed)
-// 2. Pentru harta 3D folosim sprite-ul curățat prin Flood Fill
+// Încarcă direct imaginea originală din assets/ fără nicio modificare asupra pixelilor
 function initCarVisuals() {
   const base = car.imageBase || car.imageUrl || "./assets/porsche-silver";
   const candidates = resolvedUrl
@@ -105,27 +52,19 @@ function initCarVisuals() {
     const url = candidates[idx++];
     const img = new Image();
     img.onload = () => {
+      loadedCarImg = img;
       photoEl.src = url;
-      spriteCanvas = makeCleanCarSprite(img);
     };
     img.onerror = tryLoad;
     img.src = url;
   }
 
   tryLoad();
-
-  if (spriteDataUrl) {
-    const sImg = new Image();
-    sImg.onload = () => {
-      spriteCanvas = sImg;
-    };
-    sImg.src = spriteDataUrl;
-  }
 }
 
 initCarVisuals();
 
-// Generare 120 puncte de telemetrie
+// Generare 120 puncte de telemetrie (urcare și coborâre)
 const TOTAL_POINTS = 120;
 const telemetryPoints = [];
 
@@ -158,6 +97,7 @@ for (let i = 0; i < TOTAL_POINTS; i++) {
 const maxAlt = Math.max(...telemetryPoints.map((p) => p.altitude)).toFixed(1);
 document.getElementById("val-dist").textContent = `${report.distance || "8.7 km"} • ${report.duration || "24 min"}`;
 
+// Populare tabel citiri reprezentative
 const tbody = document.getElementById("readings-table-body");
 [0, 35, 75, 115].forEach((idx) => {
   const p = telemetryPoints[idx];
@@ -173,7 +113,7 @@ const tbody = document.getElementById("readings-table-body");
   tbody.appendChild(tr);
 });
 
-// Graficul din dreapta-jos
+// Graficul din partea dreaptă-jos (Chart.js)
 const chartCtx = document.getElementById("reportTelemetryChart");
 if (chartCtx && window.Chart) {
   const sampled = telemetryPoints.filter((_, i) => i % 3 === 0);
@@ -216,7 +156,7 @@ if (chartCtx && window.Chart) {
   });
 }
 
-// Harta 3D din stânga-jos
+// Harta 3D Isometrică din stânga-jos
 const canvas = document.getElementById("trajectoryCanvas");
 const ctx = canvas.getContext("2d");
 const slider = document.getElementById("timeline-slider");
@@ -242,14 +182,14 @@ function drawPorsche3DMarker(sx, sy, slopeAngle, goingLeft, altitude) {
   ctx.ellipse(sx, sy + 16, 34, 9, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  if (spriteCanvas) {
+  if (loadedCarImg && loadedCarImg.complete && loadedCarImg.naturalWidth > 0) {
     ctx.save();
     ctx.translate(sx, sy - 6);
     ctx.rotate(slopeAngle);
     if (goingLeft) {
       ctx.scale(-1, 1);
     }
-    ctx.drawImage(spriteCanvas, -46, -28, 92, 54);
+    ctx.drawImage(loadedCarImg, -46, -28, 92, 54);
     ctx.restore();
   } else {
     ctx.fillStyle = car.color;
