@@ -255,7 +255,8 @@ function CarScreen() {
     setCaptured(0);
     setLastError(null);
     startNewSession(); // fiecare Start = o cursă nouă
-    sender.drain();
+    Queue.removeWhere((e) => e.vehicleId !== contextRef.current.vehicleId) // scoate evenimentele cu alt VIN (serverul nu le-ar accepta)
+      .then(() => sender.drain({ manual: true })); // deblochează după o eroare de cheie (401/403)
   };
 
   const onRecalibrate = () => {
