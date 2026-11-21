@@ -10,7 +10,7 @@ app.http('listSessions', {
   handler: endpoint('listSessions', async ({ request, principal, store }) => {
     await requireDevice(store, principal, request.params.deviceId);
     let sessions = await store.listSessions(request.params.deviceId, intParam(request, 'limit', 20, 1, 200));
-    if (!principal.all) sessions = sessions.filter((s) => !s.vehicleId || principal.vehicleIds.has(s.vehicleId));
+    if (!principal.all && !principal.allowAllVehicles) sessions = sessions.filter((s) => !s.vehicleId || principal.vehicleIds.has(s.vehicleId));
     const now = new Date();
     return { jsonBody: sessions.map((s) => sessionSummary(s, now)) };
   }),

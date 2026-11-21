@@ -55,14 +55,23 @@ function authenticate(headers, now = new Date()) {
   const match = /^Bearer\s+(\S+)\s*$/i.exec(header || '');
   if (!match) return deny(401, 'Lipsește header-ul Authorization: Bearer <token>.');
 
-  const hash = Buffer.from(sha256(match[1]), 'hex');
+ const hash = Buffer.from(sha256(match[1]), 'hex');
   const tenant = tenants().tenants.find((t) => {
     const candidate = Buffer.from(t.tokenHash, 'hex');
     return candidate.length === hash.length && crypto.timingSafeEqual(candidate, hash);
   });
   if (!tenant) return deny(401, 'Token necunoscut.');
   if (tenant.expiresAtUtc && Date.parse(tenant.expiresAtUtc) <= now.getTime()) return deny(401, 'Token expirat.');
-  return { ok: true, principal: { all: false, ownerId: tenant.ownerId, vehicleIds: new Set(tenant.vehicleIds) } };
+  const vehicleIds = new Set(tenant.vehicleIds);
+  return {
+    ok: true,
+    principal: {
+      all: false,
+      allowAllVehicles: vehicleIds.has('*'),
+      ownerId: tenant.ownerId,
+      vehicleIds,
+    },
+  };
 }
 
 /** Verifică firma (și vehiculul, dacă e dat). Întoarce null dacă e permis, altfel răspunsul 403. */
@@ -71,7 +80,7 @@ function authorize(principal, ownerId, vehicleId) {
   if (ownerId == null || ownerId !== principal.ownerId) {
     return { status: 403, jsonBody: { error: 'Tokenul nu are acces la această firmă (ownerId).' } };
   }
-  if (vehicleId != null && !principal.vehicleIds.has(vehicleId)) {
+  if (vehicleId != null && !principal.allowAllVehicles && !principal.vehicleIds.has(vehicleId)) {
     return { status: 403, jsonBody: { error: 'Tokenul nu are acces la acest vehicul (vehicleId).' } };
   }
   return null;
