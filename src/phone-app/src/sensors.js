@@ -1,5 +1,12 @@
+import { Platform } from 'react-native';
 import { Accelerometer, Barometer, Magnetometer } from 'expo-sensors';
 import { SENSOR_INTERVAL_MS } from './config';
+
+// Convenția backend-ului (src/backend/docs/01-format-json.md): convenția Android,
+// telefon pe masă cu ecranul în sus → accelerometrul ≈ (0, 0, +1) g.
+// Pe iPhone, expo-sensors dă semnul opus, așa că îl inversăm DOAR la accelerometru, DOAR pe iOS.
+// Magnetometrul și barometrul rămân neschimbate.
+export const ACC_SIGN = Platform.OS === 'ios' ? -1 : 1;
 
 const SENSORS = {
   acceleration: Accelerometer,
@@ -42,7 +49,9 @@ export function startSensors(status, onReading) {
   if (status.acceleration === 'live') {
     Accelerometer.setUpdateInterval(SENSOR_INTERVAL_MS);
     subs.push(
-      Accelerometer.addListener(({ x, y, z }) => onReading('acceleration', { x, y, z, unit: 'g' }))
+      Accelerometer.addListener(({ x, y, z }) =>
+        onReading('acceleration', { x: x * ACC_SIGN, y: y * ACC_SIGN, z: z * ACC_SIGN, unit: 'g' })
+      )
     );
   }
 

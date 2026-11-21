@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import {
-  Image,
+  AppState,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -12,18 +13,23 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import carImage from './src/carImage';
+import CarShowcase from './src/CarShowcase';
+import Compass from './src/Compass';
+import GMeter from './src/GMeter';
+import { relativeAltitude } from './src/altitude';
 import { API_URL, BASELINE_SAMPLES, CAPTURE_INTERVAL_MS } from './src/config';
 import { buildEvent, stableAverage } from './src/event';
+import VinSetup from './src/VinSetup';
+import { MODEL, OWNER, loadVin, normalizeVin, saveVin, vinError } from './src/vehicle';
 import { getDeviceId, newId } from './src/ids';
 import * as Queue from './src/queue';
 import { createSender } from './src/sender';
 import { checkSensors, startSensors } from './src/sensors';
 
 const CHANNELS = [
-  { key: 'acceleration', label: 'Accelerometru', unit: 'g' },
-  { key: 'magneticField', label: 'Magnetometru', unit: 'µT' },
-  { key: 'pressure', label: 'Barometru', unit: 'hPa' },
+  { key: 'acceleration', label: 'Accelerometru' },
+  { key: 'magneticField', label: 'Magnetometru' },
+  { key: 'pressure', label: 'Barometru' },
 ];
 
 const STATUS_TEXT = { live: 'live', unavailable: 'indisponibil', denied: 'fără permisiune', checking: '…' };
@@ -33,19 +39,24 @@ const fmt = (v, d = 3) => (typeof v === 'number' ? v.toFixed(d) : '—');
 export default function App() {
   return (
     <SafeAreaProvider>
-      <TelemetryScreen />
+      <CarScreen />
     </SafeAreaProvider>
   );
 }
 
-function TelemetryScreen() {
+// Telefonul este bordul mașinii:
+//  - aplicația deschisă = motor pornit → captura pornește singură, cu o sesiune nouă;
+//  - aplicația închisă / în fundal = motor oprit → captura se oprește.
+// Șoferul vede doar senzorii. Partea tehnică e în Diagnostic (apăsare lungă pe titlu).
+function CarScreen() {
   // ---------- stare afișată ----------
-  const [deviceId, setDeviceId] = useState(null);
+  const [vin, setVin] = useState(undefined); // undefined = se încarcă, null = încă neintrodus
+  const [vinInput, setVinInput] = useState('');
+  const [phoneId, setPhoneId] = useState(null);
   const [sensorStatus, setSensorStatus] = useState({ acceleration: 'checking', magneticField: 'checking', pressure: 'checking' });
   const [readings, setReadings] = useState({ acceleration: null, magneticField: null, pressure: null });
-  const [ownerId, setOwnerId] = useState('company_A');
-  const [vehicleId, setVehicleId] = useState('CAR-01');
   const [token, setToken] = useState(''); // doar în memorie, niciodată salvat
+  const [showToken, setShowToken] = useState(false);
   const [tracking, setTracking] = useState(false);
   const [sessionId, setSessionId] = useState(null);
   const [baselineHpa, setBaselineHpa] = useState(null);
@@ -54,6 +65,7 @@ function TelemetryScreen() {
   const [lastAck, setLastAck] = useState(null);
   const [lastError, setLastError] = useState(null);
   const [captured, setCaptured] = useState(0);
+  const [diagOpen, setDiagOpen] = useState(false);
 
   // ---------- referințe (evită valori vechi în callback-uri) ----------
   const latest = useRef({ acceleration: null, magneticField: null, pressure: null });
@@ -64,13 +76,12 @@ function TelemetryScreen() {
   const stopSensorsRef = useRef(null);
   const captureTimer = useRef(null);
   const uiTimer = useRef(null);
-  const statusRef = useRef(sensorStatus);
-  const deviceRef = useRef(null);
-  const contextRef = useRef({ ownerId, vehicleId, token });
+  const statusRef = useRef(null); // null până se verifică senzorii
+  const contextRef = useRef({ ownerId: OWNER.id, vehicleId: null, token: '' });
 
   useEffect(() => {
-    contextRef.current = { ownerId, vehicleId, token };
-  }, [ownerId, vehicleId, token]);
+    contextRef.current = { ownerId: OWNER.id, vehicleId: vin ?? null, token };
+  }, [vin, token]);
 
   const sender = useMemo(
     () =>
@@ -88,29 +99,7 @@ function TelemetryScreen() {
     []
   );
 
-  // ---------- pornire aplicație ----------
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      const id = await getDeviceId();
-      deviceRef.current = id;
-      const status = await checkSensors();
-      statusRef.current = status;
-      if (!alive) return;
-      setDeviceId(id);
-      setSensorStatus(status);
-      await Queue.load();
-    })();
-    const unsub = Queue.subscribe(setQueueSnap);
-    return () => {
-      alive = false;
-      unsub();
-      stopEverything();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ---------- sesiune și calibrare ----------
+  // ---------- sesiune ----------
   const startNewSession = useCallback(() => {
     sessionRef.current = newId();
     baselineRef.current = null;
@@ -140,21 +129,21 @@ function TelemetryScreen() {
   const capture = useCallback(async () => {
     if (!trackingRef.current) return;
     const status = statusRef.current;
-    if (!latest.current.acceleration) return; // accelerometrul e obligatoriu
+    const { ownerId, vehicleId } = contextRef.current;
+    if (!vehicleId || !latest.current.acceleration) return; // accelerometrul e obligatoriu
     if (status.pressure === 'live' && baselineRef.current == null) return; // încă se calibrează presiunea
 
     if (Queue.snapshot().full) {
       setLastError('Coada e plină (100). Colectarea e în pauză până se trimit evenimentele.');
-      sender.drain(); // încearcă să golească coada (după pauza de 30 s, dacă a fost cazul)
+      sender.drain();
       return;
     }
 
-    const { ownerId: o, vehicleId: v } = contextRef.current;
     const event = buildEvent({
       eventId: newId(),
-      deviceId: deviceRef.current,
-      ownerId: o,
-      vehicleId: v,
+      deviceId: vehicleId, // telefonul ESTE mașina: seria de șasiu e ID-ul ei
+      ownerId,
+      vehicleId,
       sessionId: sessionRef.current,
       now: new Date(),
       readings: latest.current,
@@ -171,8 +160,8 @@ function TelemetryScreen() {
     sender.drain();
   }, [sender]);
 
-  // ---------- Start / Stop ----------
-  function stopEverything() {
+  // ---------- motor pornit / oprit ----------
+  const stopEngine = useCallback(() => {
     trackingRef.current = false;
     if (captureTimer.current) clearInterval(captureTimer.current);
     if (uiTimer.current) clearInterval(uiTimer.current);
@@ -180,147 +169,212 @@ function TelemetryScreen() {
     uiTimer.current = null;
     if (stopSensorsRef.current) stopSensorsRef.current();
     stopSensorsRef.current = null;
-  }
+    setTracking(false);
+  }, []);
 
-  const onStart = () => {
-    if (trackingRef.current) return; // apăsări repetate nu adaugă alți ascultători
-    if (!ownerId.trim() || !vehicleId.trim()) {
-      setLastError('Completează owner și vehicul.');
-      return;
-    }
+  const startEngine = useCallback(() => {
+    if (trackingRef.current) return; // nu pornim de două ori
+    if (!statusRef.current || !contextRef.current.vehicleId) return;
     if (statusRef.current.acceleration !== 'live') {
       setLastError('Accelerometrul nu e disponibil pe acest telefon — nu putem captura.');
       return;
     }
     trackingRef.current = true;
     setTracking(true);
-    setLastError(null);
     setCaptured(0);
     latest.current = { acceleration: null, magneticField: null, pressure: null };
     startNewSession();
     stopSensorsRef.current = startSensors(statusRef.current, onReading);
     captureTimer.current = setInterval(capture, CAPTURE_INTERVAL_MS);
     uiTimer.current = setInterval(() => setReadings({ ...latest.current }), 500);
+    sender.drain(); // trimite ce a rămas din cursele anterioare
+  }, [capture, onReading, sender, startNewSession]);
+
+  // ---------- pornire aplicație ----------
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const [id, status, savedVin] = await Promise.all([getDeviceId(), checkSensors(), loadVin()]);
+      await Queue.load();
+      if (!alive) return;
+      statusRef.current = status;
+      contextRef.current = { ...contextRef.current, vehicleId: savedVin };
+      setPhoneId(id);
+      setSensorStatus(status);
+      setVin(savedVin);
+      if (savedVin) startEngine();
+    })();
+    const unsub = Queue.subscribe(setQueueSnap);
+    return () => {
+      alive = false;
+      unsub();
+      stopEngine();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // aplicația în fundal = motor oprit; revenire = cursă nouă
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') startEngine();
+      else if (state === 'background') stopEngine();
+    });
+    return () => sub.remove();
+  }, [startEngine, stopEngine]);
+
+  // ---------- seria de șasiu ----------
+  const confirmVin = () => {
+    const v = normalizeVin(vinInput);
+    if (vinError(v)) return;
+    stopEngine();
+    contextRef.current = { ...contextRef.current, vehicleId: v };
+    setVin(v);
+    saveVin(v);
+    setDiagOpen(false);
+    setTimeout(startEngine, 0); // prima cursă a mașinii
   };
 
-  const onStop = () => {
-    stopEverything();
-    setTracking(false);
+  const changeVin = () => {
+    stopEngine();
+    setVinInput(vin || '');
+    setDiagOpen(false);
+    setVin(null); // înapoi la ecranul de introducere
   };
 
-  const onCalibrate = () => {
-    if (!trackingRef.current) return;
-    startNewSession(); // sesiune nouă + baseline nou; evenimentele deja trimise rămân neschimbate
+  const onRecalibrate = () => {
+    if (trackingRef.current) startNewSession();
   };
 
-  const onRetry = () => sender.drain({ manual: true });
+  // ---------- ecrane ----------
+  if (vin === undefined) {
+    return <SafeAreaView style={styles.root} />;
+  }
 
-  // ---------- derivate pentru afișare ----------
-  const pendingHere = queueSnap.items.filter((e) => e.ownerId === ownerId && e.vehicleId === vehicleId).length;
-  const pendingOther = queueSnap.size - pendingHere;
-  const calibrating = tracking && sensorStatus.pressure === 'live' && baselineHpa == null;
+  if (vin === null) {
+    return <VinSetup value={vinInput} onChange={setVinInput} onConfirm={confirmVin} />;
+  }
 
-  const sendText = {
-    idle: queueSnap.size ? 'În așteptare' : 'Totul trimis',
-    sending: `Trimit ${sendStatus.eventId?.slice(0, 8)}…`,
-    retrying: `Reîncerc (${sendStatus.attempt}/3)…`,
-    acked: 'Confirmat de server',
-    error: 'Eroare',
-  }[sendStatus.state];
+  const alt = relativeAltitude(readings.pressure?.value, baselineHpa);
+  const pendingHere = queueSnap.items.filter((e) => e.vehicleId === vin).length;
+  const isStale = (e) => e.vehicleId !== vin; // ex. CAR-01 de la testele vechi sau un VIN anterior
+  const staleCount = queueSnap.items.filter(isStale).length;
 
   return (
     <SafeAreaView style={styles.root}>
       <StatusBar style="light" />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          {/* antet */}
-          {carImage ? <Image source={carImage} style={styles.car} resizeMode="contain" /> : null}
-          <Text style={styles.brand}>TEAMVERITY</Text>
-          <Text style={styles.title}>Telemetrie vehicul</Text>
-          <Text style={styles.small}>Device: {deviceId ? deviceId.slice(0, 8) + '…' : '…'}</Text>
+      <ScrollView contentContainerStyle={styles.content}>
+        {/* antet: apăsare lungă = Diagnostic (ascuns pentru șofer) */}
+        <Pressable onLongPress={() => setDiagOpen(true)} delayLongPress={800}>
+          <CarShowcase />
+          <Text style={styles.brand}>{OWNER.name.toUpperCase()} <Text style={styles.brandModel}>{MODEL}</Text></Text>
+          <Text style={styles.vinHeader}>{vin}</Text>
+        </Pressable>
 
-          {/* senzori */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Senzori</Text>
-            {CHANNELS.map(({ key, label, unit }) => {
-              const st = sensorStatus[key];
-              const r = readings[key];
-              return (
-                <View key={key} style={styles.sensorRow}>
-                  <View style={styles.sensorHead}>
-                    <Text style={styles.sensorLabel}>{label}</Text>
-                    <Text style={[styles.badge, st === 'live' ? styles.badgeLive : styles.badgeOff]}>{STATUS_TEXT[st]}</Text>
-                  </View>
-                  {st !== 'live' ? (
-                    <Text style={styles.value}>null — {STATUS_TEXT[st]}</Text>
-                  ) : key === 'pressure' ? (
-                    <Text style={styles.value}>
-                      {fmt(r?.value, 2)} {unit}
-                      {baselineHpa != null ? `   baseline ${fmt(baselineHpa, 2)}` : tracking ? '   (calibrare…)' : ''}
-                    </Text>
-                  ) : (
-                    <Text style={styles.value}>
-                      x {fmt(r?.x)}  y {fmt(r?.y)}  z {fmt(r?.z)} {unit}
-                    </Text>
-                  )}
+        <View style={styles.card}>
+          {CHANNELS.map(({ key, label }) => {
+            const st = sensorStatus[key];
+            const r = readings[key];
+            return (
+              <View key={key} style={styles.sensorRow}>
+                <View style={styles.sensorHead}>
+                  <Text style={styles.sensorLabel}>{label}</Text>
+                  <Text style={[styles.badge, st === 'live' ? styles.badgeLive : styles.badgeOff]}>{STATUS_TEXT[st]}</Text>
                 </View>
-              );
-            })}
-          </View>
+                {st !== 'live' ? (
+                  <Text style={styles.value}>indisponibil pe acest telefon</Text>
+                ) : key === 'acceleration' ? (
+                  <GMeter acceleration={r} active={tracking} />
+                ) : key === 'magneticField' ? (
+                  <Compass magnetic={r} acceleration={readings.acceleration} active={tracking} />
+                ) : (
+                  <View style={styles.baro}>
+                    <View style={styles.baroItem}>
+                      <Text style={styles.baroBig}>{alt != null ? `${alt >= 0 ? '+' : ''}${alt.toFixed(1)} m` : '—'}</Text>
+                      <Text style={styles.baroLabel}>{baselineHpa != null ? 'altitudine față de pornire' : tracking ? 'calibrare…' : '—'}</Text>
+                    </View>
+                    <View style={styles.baroItem}>
+                      <Text style={styles.baroBig}>{fmt(r?.value, 1)}</Text>
+                      <Text style={styles.baroLabel}>presiune (hPa)</Text>
+                    </View>
+                  </View>
+                )}
+              </View>
+            );
+          })}
+        </View>
+      </ScrollView>
 
-          {/* context */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Vehicul</Text>
-            <Text style={styles.inputLabel}>Owner (companie)</Text>
-            <TextInput style={[styles.input, tracking && styles.inputLocked]} value={ownerId} onChangeText={setOwnerId} editable={!tracking} autoCapitalize="none" autoCorrect={false} />
-            <Text style={styles.inputLabel}>Vehicul</Text>
-            <TextInput style={[styles.input, tracking && styles.inputLocked]} value={vehicleId} onChangeText={setVehicleId} editable={!tracking} autoCapitalize="characters" autoCorrect={false} />
-            <Text style={styles.inputLabel}>Token de test</Text>
-            <TextInput style={styles.input} value={token} onChangeText={setToken} secureTextEntry autoCapitalize="none" autoCorrect={false} placeholder="primit privat de la Adina/Stefana" placeholderTextColor="#55607a" />
-          </View>
+      {/* ---------- Diagnostic (pentru echipă, nu pentru șofer) ---------- */}
+      <Modal visible={diagOpen} animationType="slide" onRequestClose={() => setDiagOpen(false)}>
+        <SafeAreaProvider>
+          <SafeAreaView style={styles.root}>
+            <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+              <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+                <View style={styles.diagHeader}>
+                  <Text style={styles.diagTitle}>Diagnostic</Text>
+                  <Pressable onPress={() => setDiagOpen(false)} style={styles.closeBtn}>
+                    <Text style={styles.btnText}>Închide</Text>
+                  </Pressable>
+                </View>
 
-          {/* controale */}
-          <View style={styles.buttons}>
-            {!tracking ? (
-              <Btn label="Start" onPress={onStart} primary />
-            ) : (
-              <Btn label="Stop" onPress={onStop} danger />
-            )}
-            <Btn label="Calibrare / sesiune nouă" onPress={onCalibrate} disabled={!tracking} />
-          </View>
+                <View style={styles.card}>
+                  <Text style={styles.cardTitle}>Mașina acestui telefon</Text>
+                  <Row k="Serie de șasiu" v={vin} />
+                  <Btn label="Schimbă seria de șasiu" onPress={changeVin} />
+                  <Text style={styles.inputLabel}>Cheie server (DEVICE_API_KEY)</Text>
+                  <View style={styles.tokenRow}>
+                    <TextInput
+                      style={[styles.input, { flex: 1 }]}
+                      value={token}
+                      onChangeText={setToken}
+                      secureTextEntry={!showToken}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      placeholder="goală dacă serverul nu cere cheie"
+                      placeholderTextColor="#55607a"
+                    />
+                    <Pressable onPress={() => setShowToken((v) => !v)} style={styles.eye}>
+                      <Text style={styles.eyeText}>{showToken ? 'Ascunde' : 'Arată'}</Text>
+                    </Pressable>
+                  </View>
+                </View>
 
-          {/* sesiune și coadă */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Trimitere</Text>
-            <Row k="Stare" v={tracking ? (calibrating ? 'Calibrez presiunea…' : 'Capturez la 2 s') : 'Oprit'} />
-            <Row k="Sesiune" v={sessionId ? sessionId.slice(0, 8) + '…' : '—'} />
-            <Row k="Capturate în sesiune" v={String(captured)} />
-            <Row k="În coadă (acest vehicul)" v={String(pendingHere)} />
-            {pendingOther > 0 ? <Row k="În coadă (alt owner/vehicul)" v={String(pendingOther)} /> : null}
-            {queueSnap.rejected.length > 0 ? <Row k="Respinse de server" v={String(queueSnap.rejected.length)} warn /> : null}
-            <Row k="Expediere" v={sendText} />
-            <Row k="Ultima confirmare" v={lastAck ? `${lastAck.eventId.slice(0, 8)}… (${lastAck.status}) ${lastAck.atUtc.slice(11, 19)} UTC` : '—'} />
-            <Row k="API" v={API_URL || 'lipsă — setează .env'} warn={!API_URL} />
-            {lastError ? <Text style={styles.error}>{lastError}</Text> : null}
-            <Btn label="Retry" onPress={onRetry} disabled={queueSnap.size === 0} />
-          </View>
+                <View style={styles.card}>
+                  <Text style={styles.cardTitle}>Trimitere</Text>
+                  <Row k="Motor" v={tracking ? 'pornit (capturez la 2 s)' : 'oprit'} />
+                  <Row k="Sesiune (cursă)" v={sessionId ? sessionId.slice(0, 8) + '…' : '—'} />
+                  <Row k="Capturate în cursă" v={String(captured)} />
+                  <Row k="În coadă" v={String(pendingHere)} />
+                  {staleCount > 0 ? <Row k="În coadă (teste vechi)" v={String(staleCount)} warn /> : null}
+                  {queueSnap.rejected.length > 0 ? <Row k="Respinse de server" v={String(queueSnap.rejected.length)} warn /> : null}
+                  <Row k="Expediere" v={sendStatus.state} />
+                  <Row k="Ultima confirmare" v={lastAck ? `${lastAck.eventId.slice(0, 8)}… (${lastAck.status}) ${lastAck.atUtc.slice(11, 19)} UTC` : '—'} />
+                  <Row k="API" v={API_URL || 'lipsă — setează .env'} warn={!API_URL} />
+                  <Row k="deviceId trimis" v={vin} />
+                  <Row k="ID intern telefon" v={phoneId ? phoneId.slice(0, 8) + '…' : '—'} />
+                  {lastError ? <Text style={styles.error}>{lastError}</Text> : null}
+                  <View style={styles.buttons}>
+                    <Btn label="Retry" onPress={() => sender.drain({ manual: true })} disabled={queueSnap.size === 0} />
+                    <Btn label="Recalibrare altitudine" onPress={onRecalibrate} disabled={!tracking} />
+                  </View>
+                  {staleCount > 0 ? <Btn label={`Șterge ${staleCount} evenimente de test vechi`} onPress={() => Queue.removeWhere(isStale)} /> : null}
+                </View>
 
-          <Text style={styles.footnote}>
-            Telefonul ținut în mână e o sursă de senzori, nu un instrument de măsură validat pentru condus. Captura se oprește când aplicația e închisă sau telefonul e blocat.
-          </Text>
-        </ScrollView>
-      </KeyboardAvoidingView>
+                <Text style={styles.footnote}>
+                  Telefonul e o sursă de senzori, nu un instrument de măsură validat pentru condus. Captura se oprește când aplicația e închisă sau telefonul e blocat.
+                </Text>
+              </ScrollView>
+            </KeyboardAvoidingView>
+          </SafeAreaView>
+        </SafeAreaProvider>
+      </Modal>
     </SafeAreaView>
   );
 }
 
-function Btn({ label, onPress, primary, danger, disabled }) {
+function Btn({ label, onPress, disabled }) {
   return (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      style={({ pressed }) => [styles.btn, primary && styles.btnPrimary, danger && styles.btnDanger, disabled && styles.btnDisabled, pressed && { opacity: 0.7 }]}
-    >
+    <Pressable onPress={onPress} disabled={disabled} style={({ pressed }) => [styles.btn, disabled && styles.btnDisabled, pressed && { opacity: 0.7 }]}>
       <Text style={styles.btnText}>{label}</Text>
     </Pressable>
   );
@@ -342,8 +396,10 @@ const styles = StyleSheet.create({
   content: { padding: 18, paddingBottom: 48 },
   car: { width: '100%', height: 170, marginBottom: 8 },
   brand: { color: '#5fa2ff', letterSpacing: 5, fontSize: 12, fontWeight: '600', textAlign: 'center' },
-  title: { color: '#fff', fontSize: 26, fontWeight: '300', textAlign: 'center', marginTop: 4 },
-  small: { color: '#6b768c', fontSize: 12, textAlign: 'center', marginTop: 4, marginBottom: 12 },
+  brandModel: { color: "#e8eefc", fontSize: 15, fontWeight: "700", letterSpacing: 3 },
+  title: { color: '#fff', fontSize: 26, fontWeight: '300', textAlign: 'center', marginTop: 4, marginBottom: 8 },
+  vinHeader: { color: '#6b768c', fontSize: 13, textAlign: 'center', marginTop: 4, marginBottom: 8, letterSpacing: 2, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+  btnPrimary: { backgroundColor: '#1e6bff', marginTop: 16 },
   card: { backgroundColor: '#0d1119', borderRadius: 14, padding: 14, marginTop: 12, borderWidth: 1, borderColor: '#182033' },
   cardTitle: { color: '#c8d2e6', fontSize: 13, fontWeight: '600', letterSpacing: 1, marginBottom: 8, textTransform: 'uppercase' },
   sensorRow: { paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#141b2a' },
@@ -352,16 +408,23 @@ const styles = StyleSheet.create({
   badge: { fontSize: 11, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, overflow: 'hidden' },
   badgeLive: { backgroundColor: '#0f3d26', color: '#5ee39a' },
   badgeOff: { backgroundColor: '#3a1d1d', color: '#ff8a8a' },
-  value: { color: '#9fb0cc', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 13, marginTop: 4 },
-  inputLabel: { color: '#7f8aa3', fontSize: 12, marginTop: 8, marginBottom: 4 },
+  value: { color: '#9fb0cc', fontSize: 13, marginTop: 4 },
+  baro: { flexDirection: 'row', marginTop: 10 },
+  baroItem: { flex: 1, alignItems: 'center' },
+  baroBig: { color: '#fff', fontSize: 26, fontWeight: '200' },
+  baroLabel: { color: '#7f8aa3', fontSize: 11, marginTop: 2 },
+  diagHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  diagTitle: { color: '#fff', fontSize: 22, fontWeight: '300' },
+  closeBtn: { backgroundColor: '#1a2233', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8 },
+  inputLabel: { color: '#7f8aa3', fontSize: 12, marginTop: 12, marginBottom: 4 },
   input: { backgroundColor: '#070a10', color: '#fff', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: '#1d2638', fontSize: 15 },
-  inputLocked: { opacity: 0.5 },
-  buttons: { flexDirection: 'row', gap: 10, marginTop: 14 },
-  btn: { flex: 1, backgroundColor: '#1a2233', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 8 },
-  btnPrimary: { backgroundColor: '#1e6bff' },
-  btnDanger: { backgroundColor: '#c0352b' },
+  tokenRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  eye: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, backgroundColor: '#1a2233' },
+  eyeText: { color: '#c8d2e6', fontSize: 13, fontWeight: '600' },
+  buttons: { flexDirection: 'row', gap: 10, marginTop: 6 },
+  btn: { flex: 1, backgroundColor: '#1a2233', borderRadius: 12, paddingVertical: 12, alignItems: 'center', marginTop: 8 },
   btnDisabled: { opacity: 0.35 },
-  btnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  btnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 },
   rowK: { color: '#7f8aa3', fontSize: 13 },
   rowV: { color: '#e4e9f2', fontSize: 13, maxWidth: '58%' },
