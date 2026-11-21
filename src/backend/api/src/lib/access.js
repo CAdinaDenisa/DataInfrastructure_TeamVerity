@@ -16,7 +16,7 @@ async function requireDevice(store, principal, deviceId) {
 async function requireSession(store, principal, sessionId) {
   const session = await store.getSession(sessionId);
   if (!session) throw new HttpError(404, 'Sesiune inexistentă.');
-  if (principal.all) return session;
+  if (principal.all || principal.allowAllVehicles) return session;
   await requireDevice(store, principal, session.deviceId);
   if (session.vehicleId && !principal.vehicleIds.has(session.vehicleId)) {
     throw new HttpError(403, 'Tokenul nu are acces la acest vehicul.');
