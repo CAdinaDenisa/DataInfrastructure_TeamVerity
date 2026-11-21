@@ -9,3 +9,4 @@
 **/coverage/
 **/.local-data/
 infrastructure/main.json
+.DS_Store
