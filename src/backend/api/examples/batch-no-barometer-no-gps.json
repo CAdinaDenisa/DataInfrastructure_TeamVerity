@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "deviceId": "phone-ana-02",
+  "sessionId": "s-20261121-101700-a1b2",
+  "batchId": "b-a1b2-000001",
+  "sentAt": "2026-11-21T10:17:01.000Z",
+  "capabilities": { "accelerometer": true, "magnetometer": true, "barometer": false, "gps": false },
+  "events": [
+    { "eventType": "accelerometer", "value": { "x": 0.5, "y": 0.0, "z": 0.87 }, "unit": "g", "timestamp": "2026-11-21T10:17:00.100Z", "seq": 0 },
+    { "eventType": "magnetometer", "value": { "x": 10.2, "y": 18.0, "z": -38.5 }, "unit": "uT", "timestamp": "2026-11-21T10:17:00.110Z", "seq": 1 }
+  ]
+}

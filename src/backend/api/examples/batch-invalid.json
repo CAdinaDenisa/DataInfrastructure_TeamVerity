@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "1.0",
+  "deviceId": "phone-stefana-01",
+  "sessionId": "s-20261121-101530-7f3a",
+  "batchId": "b-7f3a-000099",
+  "sentAt": "2026-11-21T10:15:31.020Z",
+  "capabilities": { "accelerometer": true, "magnetometer": true, "barometer": false, "gps": true },
+  "events": [
+    { "eventType": "accelerometer", "value": { "x": 0.2, "y": 9.6, "z": 1.1 }, "unit": "g", "timestamp": "2026-11-21T10:15:30.100Z", "seq": 1 },
+    { "eventType": "barometer", "value": { "pressure": 1012.6 }, "unit": "hPa", "timestamp": "2026-11-21 10:15:30", "seq": 2 },
+    { "eventType": "gps", "value": { "latitude": 44.43, "longitude": 26.10 }, "unit": "wgs84", "timestamp": "2026-11-21T10:15:30.900Z", "seq": 3 }
+  ]
+}

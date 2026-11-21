@@ -1,0 +1,25 @@
+{
+  "name": "teamverity-backend-api",
+  "version": "1.0.0",
+  "description": "Backend Azure Functions + Azure SQL pentru telemetria Porsche Hecaton (Stefana)",
+  "main": "src/functions/*.js",
+  "scripts": {
+    "start": "func start",
+    "test": "node --test",
+    "db:up": "docker compose -f ../database/docker-compose.yml up -d",
+    "db:down": "docker compose -f ../database/docker-compose.yml down",
+    "db:migrate": "node scripts/migrate.js",
+    "simulate": "node scripts/simulate.js",
+    "setup:local": "node -e \"require('fs').copyFileSync('local.settings.example.json','local.settings.json',require('fs').constants.COPYFILE_EXCL)\"",
+    "api:docker": "docker compose -f ../database/docker-compose.yml --profile api up -d"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "mssql": "^11.0.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
