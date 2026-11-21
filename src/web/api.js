@@ -16,11 +16,17 @@ export function apiBase() {
   if (!raw || raw.includes("<") || raw.includes("aici completez")) {
     return DEFAULT_API_BASE;
   }
-  return raw.replace(/\/+$/, "");
+  const base = raw.replace(/\/+$/, "");
+  // toate rutele backend-ului sunt sub /api; dacă în config s-a pus doar adresa Function App, o adăugăm noi
+  try {
+    if (new URL(base).pathname === "/") return `${base}/api`;
+  } catch (_) {}
+  return base;
 }
 
 function presetToken() {
-  const raw = (appConfig().apiToken || "").trim();
+  // acceptă și tokenul scris între < > (ca în exemplele din documentație)
+  const raw = (appConfig().apiToken || "").trim().replace(/^<(.*)>$/, "$1").trim();
   if (!raw || raw.includes("<") || raw.includes("PUNE_TOKENUL")) {
     return "";
   }
@@ -150,6 +156,11 @@ export const api = {
     });
   },
 
+  // GET /devices?ownerId= -> telefoanele (VIN-urile) firmei care au trimis date
+  devices(auth) {
+    return requestJson("/devices", { auth, query: { ownerId: auth.ownerId || "porsche" } });
+  },
+
   sessions(auth, { deviceId, vehicleId, limit = 50 } = {}) {
     if (deviceId) {
       return requestJson(`/devices/${encodeURIComponent(deviceId)}/sessions`, {
@@ -167,16 +178,21 @@ export const api = {
     });
   },
 
-  sessionDetail(auth, sessionId, deviceId) {
-    if (deviceId) {
-      return requestJson(
-        `/devices/${encodeURIComponent(deviceId)}/sessions/${encodeURIComponent(sessionId)}`,
-        { auth, query: { ownerId: auth.ownerId || "porsche" } }
-      );
-    }
-    return requestJson(`/sessions/${encodeURIComponent(sessionId)}`, {
+  // backend-ul are doar GET /sessions/{id} (nu există /devices/{id}/sessions/{id})
+  sessionDetail(auth, sessionId) {
+    return requestJson(`/sessions/${encodeURIComponent(sessionId)}`, { auth });
+  },
+
+  // GET /sessions/{id}/track?points=N -> { summary, totalPoints, points: [...] } (pentru raport)
+  sessionTrack(auth, sessionId, points = 300) {
+    return requestJson(`/sessions/${encodeURIComponent(sessionId)}/track`, { auth, query: { points } });
+  },
+
+  // GET /devices/{id}/readings?type=&sessionId= -> citirile brute ale unui senzor (graficele din raport)
+  readings(auth, deviceId, { type, sessionId, limit = 2000 } = {}) {
+    return requestJson(`/devices/${encodeURIComponent(deviceId)}/readings`, {
       auth,
-      query: { ownerId: auth.ownerId || "porsche" }
+      query: { type, sessionId, limit }
     });
   }
 };
@@ -185,21 +201,24 @@ export async function loadSessionsByVehicle(auth, deviceIds = []) {
   const byVehicle = {};
   const allSessions = [];
 
-  // 1. Încercăm ruta generală /sessions?ownerId=porsche
+  // Backend-ul NU are o rută generală /sessions: listăm sesiunile per dispozitiv (VIN),
+  // cu /devices/{VIN}/sessions. VIN-urile vin din: config/flotă, telemetria văzută și GET /devices (telefoanele firmei).
+  const ids = new Set(deviceIds.filter(Boolean).map((d) => String(d).trim()));
   try {
-    const res = await api.sessions(auth, { vehicleId: auth.vehicleId || undefined, limit: 100 });
-    const list = Array.isArray(res) ? res : res?.sessions || res?.items || [];
-    allSessions.push(...list);
+    const devices = await api.devices(auth);
+    (Array.isArray(devices) ? devices : []).forEach((d) => d?.deviceId && ids.add(String(d.deviceId).trim()));
   } catch (_) {
-    // Dacă ruta generală nu e expusă, încercăm per deviceId
-    for (const devId of deviceIds) {
-      try {
-        const res = await api.sessions(auth, { deviceId: devId, limit: 50 });
-        const list = Array.isArray(res) ? res : res?.sessions || res?.items || [];
-        allSessions.push(...list);
-      } catch (_) {}
-    }
+    /* fără listă de dispozitive: rămânem la VIN-urile cunoscute */
   }
+  const lists = await Promise.all(
+    [...ids].map((devId) =>
+      api.sessions(auth, { deviceId: devId, limit: 50 }).then(
+        (res) => (Array.isArray(res) ? res : res?.sessions || res?.items || []),
+        () => []
+      )
+    )
+  );
+  lists.forEach((list) => allSessions.push(...list));
 
   for (const raw of allSessions) {
     const vin = String(raw.vehicleId || raw.vin || raw.deviceId || "").trim().toUpperCase();

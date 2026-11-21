@@ -90,7 +90,7 @@ function persistAuthFromUI() {
   auth = {
     ownerId: (ownerInput?.value || "porsche").trim() || "porsche",
     vehicleId: (vinInput?.value || "").trim().toUpperCase(),
-    token: latestAuth.token || appConfig().apiToken || ""
+    token: latestAuth.token || ""
   };
   if (vinInput) vinInput.value = auth.vehicleId;
   saveAuth(auth);
@@ -199,7 +199,7 @@ async function connect() {
   updateConnectButton();
 
   const latestAuth = loadAuth();
-  auth.token = latestAuth.token || appConfig().apiToken || "";
+  auth.token = latestAuth.token || "";
 
   if (!auth.token) {
     setBadge("Neconectat • token lipsă", false);
@@ -360,7 +360,7 @@ function updateOverlay(car) {
 
 // ---------------------------------------------------------------- rapoarte (sesiuni din bază)
 async function refreshSessions() {
-  const { byVehicle } = await loadSessionsByVehicle(auth, [...seenDeviceIds]);
+  const { byVehicle } = await loadSessionsByVehicle(auth, [...seenDeviceIds, ...fleet.map((c) => c.vin)]);
   sessionsByVin = byVehicle;
   lastSessionsLoad = Date.now();
 
@@ -505,8 +505,6 @@ function thumbFor(car, imgEl) {
 
 function renderFleet() {
   disposeScenes();                       // <-- NOU (prima linie)
-  // scenele se recreează: la următorul poll reîncărcăm traseul real
-  Object.values(liveApi).forEach((l) => (l.loaded = false));
   const grid = document.getElementById("fleet-grid");
   grid.innerHTML = "";
 
