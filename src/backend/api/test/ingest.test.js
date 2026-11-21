@@ -119,3 +119,29 @@ test('sesiunea acumulează distanța și apare în listSessions', async () => {
   assert.equal(states.length, 5);
   assert.ok(states[4].distanceM > 44);
 });
+
+test('mișcări de câțiva metri (format telefon v1 cu GPS) apar în traseu la precizie de cm', async () => {
+  const { downsampleTrack, trackPoint } = require('../src/lib/sessionStats');
+  const eventV1 = require('../examples/event-v1-phone-app.json');
+  const store = createMemoryStore();
+  const lat0 = 44.4268;
+  const lon0 = 26.1025;
+  const mPerDegLat = (Math.PI / 180) * 6371000;
+  // pornim de pe loc, apoi 1 m, 2 m, 3 m spre nord (câte un eveniment la 2 s)
+  for (let i = 0; i < 4; i++) {
+    const ev = JSON.parse(JSON.stringify(eventV1));
+    ev.eventId = `small-move-${i}`;
+    ev.capturedAtUtc = new Date(Date.parse('2026-11-21T10:15:30.000Z') + i * 2000).toISOString();
+    ev.location = { latitude: Number((lat0 + i / mPerDegLat).toFixed(7)), longitude: lon0, altitude: null, accuracy: 4, speed: 0.5, heading: 0 };
+    const r = await ingest({ body: ev, store, now: NOW });
+    assert.equal(r.status, 201, JSON.stringify(r.jsonBody));
+    assert.equal(r.jsonBody.state.position.source, 'gps+barometer');
+  }
+  const states = await store.getSessionStates(eventV1.sessionId);
+  const pts = downsampleTrack(states, 300).map((s) => trackPoint(s));
+  assert.equal(pts.length, 4);
+  pts.forEach((p, i) => {
+    assert.ok(Math.abs(p.y - i) < 0.05, `punctul ${i}: y=${p.y}`);
+    assert.ok(Math.abs(p.x) < 0.05, `punctul ${i}: x=${p.x}`);
+  });
+});

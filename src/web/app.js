@@ -288,6 +288,8 @@ const liveSimState = {};
 
 function renderFleet() {
   disposeScenes();                       // <-- NOU (prima linie)
+  // scenele se recreează: la următorul poll reîncărcăm traseul real
+  Object.values(liveApi).forEach((l) => (l.loaded = false));
   const grid = document.getElementById("fleet-grid");
   grid.innerHTML = "";
 
@@ -442,11 +444,100 @@ document.getElementById("add-car-form").addEventListener("submit", (e) => {
   renderFleet();
 });
 
+/* ------------------------------------------------------------------ */
+/*  Date reale din backend (Azure Functions)                          */
+/* ------------------------------------------------------------------ */
+// config.js (copiat din config.example.js): apiBaseUrl, apiToken (opțional), pollIntervalMs.
+// Pentru fiecare mașină citim ultima stare a telefonului cu deviceId-ul ei (seria de șasiu / VIN).
+// Dacă nu avem API sau telefonul nu a trimis nimic, cardul rămâne pe simulare.
+const API = window.APP_CONFIG || {};
+const API_BASE = (API.apiBaseUrl || "").replace(/\/+$/, "");
+const POLL_MS = Math.max(500, API.pollIntervalMs || 1000);
+const LIVE_STALE_MS = 2 * 60 * 1000; // o stare mai veche de 2 minute nu mai e „live”
+const liveApi = {}; // carId -> { active, sessionId, lastTs, loaded }
+
+async function apiGet(path) {
+  const headers = API.apiToken ? { Authorization: `Bearer ${API.apiToken}` } : {};
+  const res = await fetch(`${API_BASE}${path}`, { headers });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`${res.status} ${path}`);
+  return res.json();
+}
+
+const roughOf = (advice) => (advice && /rough|pothole/i.test(advice) ? 1 : 0);
+
+function showLiveTelemetry(car, p, pitch, extra = "") {
+  const posEl = document.getElementById(`telemetry-pos-${car.id}`);
+  const altEl = document.getElementById(`telemetry-alt-${car.id}`);
+  if (posEl) posEl.textContent = `Poziție: X ${p.x.toFixed(1)}m, Y ${p.y.toFixed(1)}m${extra}`;
+  if (altEl) altEl.textContent = `Altitudine: ${p.z >= 0 ? "+" : ""}${p.z.toFixed(1)}m • Pitch: ${(pitch ?? 0).toFixed(1)}°`;
+}
+
+async function pollCar(car) {
+  const scene = scenes[car.id];
+  if (!scene || !car.deviceId) return;
+  const live = (liveApi[car.id] ||= { active: false, sessionId: null, lastTs: null, loaded: false });
+
+  const st = await apiGet(`/devices/${encodeURIComponent(car.deviceId)}/state`);
+  const pos = st && st.position;
+  const fresh = st && Date.now() - Date.parse(st.timestamp) < LIVE_STALE_MS;
+  if (!pos || pos.x == null || pos.y == null || !fresh) {
+    // fără GPS (x/y lipsesc) sau date vechi: nu avem traseu de desenat
+    if (live.active) {
+      live.active = false;
+      scene.clear();
+    }
+    return;
+  }
+
+  // cursă nouă sau scenă recreată: încărcăm tot traseul de până acum
+  if (!live.active || !live.loaded || st.sessionId !== live.sessionId) {
+    live.active = true;
+    live.sessionId = st.sessionId;
+    live.loaded = true;
+    live.lastTs = null;
+    scene.clear();
+    try {
+      const track = await apiGet(`/sessions/${encodeURIComponent(st.sessionId)}/track?points=700`);
+      const pts = (track?.points || [])
+        .filter((q) => q.x != null && q.y != null)
+        .map((q) => ({ x: q.x, y: q.y, z: q.altRelM ?? 0, rough: roughOf(q.advice) }));
+      if (pts.length) {
+        scene.setPath(pts);
+        scene.setCarAt(pts.length - 1, true);
+        live.lastTs = track.points[track.points.length - 1].t;
+      }
+    } catch (_) {
+      /* traseul complet e un bonus; continuăm cu punctele live */
+    }
+  }
+
+  if (st.timestamp === live.lastTs) return;
+  live.lastTs = st.timestamp;
+  const p = { x: pos.x, y: pos.y, z: pos.z ?? st.altitudeRel?.value ?? 0, rough: roughOf(st.advice) };
+  scene.pushPoint(p);
+  scene.setCar(p);
+  const acc = st.gps?.accuracy != null ? ` (GPS ±${Math.round(st.gps.accuracy)}m)` : "";
+  showLiveTelemetry(car, p, st.orientation?.pitch, acc);
+}
+
+async function pollLoop() {
+  await Promise.all(
+    fleet.map((car) =>
+      pollCar(car).catch(() => {
+        /* API indisponibil (CORS, rețea, token): cardul rămâne pe simulare */
+      })
+    )
+  );
+  setTimeout(pollLoop, POLL_MS);
+}
+
 function tickSimulation() {
   fleet.forEach((car) => {
     const scene = scenes[car.id];
     const state = liveSimState[car.id];
     if (!scene || !state) return;
+    if (liveApi[car.id]?.active) return; // are date reale: nu mai simulăm
 
     state.t += 0.018;
 
@@ -475,5 +566,6 @@ function tickSimulation() {
 
 renderFleet();
 tickSimulation();
+if (API_BASE) pollLoop();
 
 renderFleet();
