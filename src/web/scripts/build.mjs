@@ -1,4 +1,4 @@
-import { rm, mkdir, copyFile, readdir, access } from "node:fs/promises";
+import { rm, mkdir, copyFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,8 +15,8 @@ const publicFiles = [
   "report.html",
   "app.js",
   "report.js",
+  "scene3d.js",
   "styles.css",
-   "recommendations.js",
   "config.example.js"
 ];
 
@@ -29,7 +29,6 @@ async function build() {
     await copyFile(path.join(rootDir, file), path.join(distDir, file));
   }
 
-  // Copiază imaginile mașinilor din assets/
   try {
     const assetFiles = await readdir(assetsSrcDir);
     for (const asset of assetFiles) {
@@ -39,11 +38,11 @@ async function build() {
     console.warn("Atenție: folderul assets/ lipsește sau este gol.");
   }
 
-  // Păstrăm și vendor/chart.umd.js pentru compatibilitate cu build-ul
-  const chartSrc = path.join(rootDir, "node_modules", "chart.js", "dist", "chart.umd.js");
-  const chartDest = path.join(vendorDir, "chart.umd.js");
-  await access(chartSrc);
-  await copyFile(chartSrc, chartDest);
+  // vendor/ (chart.js + three.js) -> dist/vendor
+  const vendorSrc = path.join(rootDir, "vendor");
+  for (const f of await readdir(vendorSrc)) {
+    await copyFile(path.join(vendorSrc, f), path.join(vendorDir, f));
+  }
 
   console.log("Build finalizat cu succes în src/web/dist!");
 }
