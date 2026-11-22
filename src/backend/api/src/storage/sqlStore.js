@@ -67,6 +67,19 @@ function createSqlStore(sqlConfig) {
       return r.recordset[0] ? rowToSession(r.recordset[0]) : null;
     },
 
+    async getActiveVehicleSession(vehicleId, activeWindowSec = 30) {
+      const r = await (await pool()).request()
+        .input('vehicle_id', sql.NVarChar(64), vehicleId)
+        .input('sec', sql.Int, activeWindowSec)
+        .query(`SELECT TOP 1 session_id, device_id, last_event_at
+                FROM dbo.sessions
+                WHERE vehicle_id = @vehicle_id
+                  AND last_event_at >= DATEADD(second, -@sec, SYSUTCDATETIME())
+                ORDER BY last_event_at DESC`);
+      const row = r.recordset[0];
+      return row ? { sessionId: row.session_id, deviceId: row.device_id, lastEventAt: iso(row.last_event_at) } : null;
+    },
+
     async listSessions(deviceId, limit = 20) {
       const r = await (await pool()).request()
         .input('device_id', sql.NVarChar(64), deviceId).input('limit', sql.Int, limit)

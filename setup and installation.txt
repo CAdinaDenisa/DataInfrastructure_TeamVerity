@@ -1,0 +1,375 @@
+TEAMVERITY - VERITY DRIVE
+SETUP AND INSTALLATION
+
+Repository: https://github.com/CAdinaDenisa/DataInfrastructure_TeamVerity
+Source baseline: main, commit 9352946af6e8a1b01d45f3ce95e5772622165665.
+Commands below use PowerShell unless explicitly marked as browser JavaScript.
+Run commands from the stated directory, one command at a time. Stop on errors.
+The separate running-instructions file describes the actual demonstration.
+
+A. CHOOSE THE APPROPRIATE SETUP
+
+- Existing cloud demo: complete B, then C. The team operator supplies the
+  deployed addresses and demo token; a judge does not need to provision Azure.
+- Recreate the Azure environment: Adina completes D, then C.
+- Persistent local development: complete B, then E.
+- Lightweight processing/UI testing: complete B, then F (memory mode).
+
+B. GET THE PROJECT AND INSTALL APPLICATION PACKAGES
+
+1. Install the software required for your role in required dependencies.txt.
+   Use Node 24.x. Verify the commands you need:
+
+   git --version
+   node --version
+   npm --version
+   func --version
+   az version
+   docker compose version
+
+   func, az, and Docker are needed only for the paths that use them. Core Tools
+   should be v4. If missing, its npm installation method is:
+
+   npm install --global azure-functions-core-tools@4 --unsafe-perm true
+
+   After installing a tool, reopen the terminal if its command is not found.
+
+2. Clone and open the repository:
+
+   git clone https://github.com/CAdinaDenisa/DataInfrastructure_TeamVerity.git
+   cd DataInfrastructure_TeamVerity
+   code .
+
+3. From the repository root, install each application's locked dependencies:
+
+   npm --prefix src/backend/api ci
+   npm --prefix src/web ci
+   npm --prefix src/phone-app ci
+
+   There is no root npm install step. Web installation also populates vendor/.
+   The phone's Expo SDK and native modules must remain mutually compatible.
+
+C. CONFIGURE CLIENTS FOR AN EXISTING AZURE BACKEND
+
+C1. Adina: obtain actual deployed addresses
+
+Use the correct Azure subscription. In Cloud Shell, login is normally already
+available; on a local Azure CLI installation authenticate with az login first.
+The following commands run from any directory:
+
+   $ResourceGroup = Read-Host 'Resource group containing the team deployment'
+   $FunctionName = 'teamverity-api-adina01utcn'
+   $FunctionHost = az functionapp show --name $FunctionName --resource-group $ResourceGroup --query defaultHostName --output tsv; if ($LASTEXITCODE -ne 0 -or !$FunctionHost) { throw 'Function App lookup failed.' }
+   $ApiBaseUrl = 'https://' + $FunctionHost
+   $ApiBaseUrl
+   Invoke-RestMethod -Uri ($ApiBaseUrl + '/api/health')
+
+Expected cloud health: status=ok, storageMode=sql, database=ok, auth=enabled.
+A 404 requires checking the address, published functions, and deployment;
+configuration changes alone do not publish API source code. A 503 JSON health
+response with database=unreachable requires fixing SQL connectivity/grants.
+
+To list registered functions:
+
+   az functionapp function list --name $FunctionName --resource-group $ResourceGroup --query "[].{Function:name}" --output table
+
+The actual hostname may differ from a name guessed by appending
+.azurewebsites.net. Use the returned defaultHostName everywhere.
+
+For the website, use the dashboard storage name returned by dashboard.bicep,
+or the AZURE_WEB_STORAGE_NAME Actions variable:
+
+   $WebStorageName = Read-Host 'Dedicated dashboard storage account name'
+   $DashboardUrl = az storage account show --name $WebStorageName --resource-group $ResourceGroup --query primaryEndpoints.web --output tsv; if ($LASTEXITCODE -ne 0 -or !$DashboardUrl) { throw 'Dashboard endpoint lookup failed.' }
+   $DashboardUrl
+
+C2. Ana: configure the phone
+
+From the repository root, create the file once if it does not exist:
+
+   Copy-Item src/phone-app/.env.example src/phone-app/.env
+
+Set EXPO_PUBLIC_API_URL in src/phone-app/.env to the actual HTTPS API base URL
+from C1. The value has no /api or /api/telemetry suffix. The mobile API helper
+adds /api/telemetry. The setting must not point to the Storage dashboard URL.
+
+Adina can print the exact line to copy, avoiding a literal placeholder:
+
+   'EXPO_PUBLIC_API_URL=' + $ApiBaseUrl
+
+Enter the original owner token through the phone's token field. Do not embed
+it in EXPO_PUBLIC variables or commit it. The current sender prioritizes the
+phone input over the optional environment fallback. The phone's owner ID is
+porsche, defined in src/phone-app/src/vehicle.js. Configure a different approved
+17-character VIN on each phone. Example demonstration identifiers used by the
+project are WP0ZZZ99ZTS392124 and WP0ZZZY1ZNSA54819.
+
+C3. Stefana / Adina: provision the owner credential
+
+If an existing token works, reuse its matching server entry. To generate a new
+credential deliberately, run from the repository root:
+
+   node src/backend/api/scripts/new-token.js porsche WP0ZZZ99ZTS392124 WP0ZZZY1ZNSA54819 --hours 24
+
+The script prints an ORIGINAL TOKEN and a JSON ENTRY CONTAINING ITS HASH.
+Give the original token privately to both phone testers and the dashboard
+operator. Only the generated JSON entry belongs in the server setting.
+
+In Function App Settings / Environment variables / App settings, set
+DEMO_TENANTS_JSON to a JSON ARRAY containing that entry. Enclose the printed
+object in square brackets. Preserve other owners' entries. When rotating this
+owner's token, replace its old credential entry deliberately and update every
+client that uses it. Do not paste HASH-UL-EXISTENT or any hash placeholder.
+
+Keep ownerId=porsche, authorize the actual phone VINs in vehicleIds, and keep
+expiresAtUtc in the future. The example generator's expiry is 24 hours from
+generation; generate/update credentials before a later demonstration. Save /
+Apply / Confirm and allow the Function App to restart. No application-code
+deployment is necessary solely to update this setting. Preserve the updated
+JSON when reapplying main.bicep so an old parameter value does not restore it.
+
+C4. Daniela: configure and authorize the dashboard
+
+From the repository root, create the local config once:
+
+   Copy-Item src/web/config.example.js src/web/config.js
+
+Edit config.js: set apiBaseUrl to the actual API base URL PLUS /api. Keep
+ownerId=porsche. Do not add a real apiToken to a publicly served config file.
+The local file is ignored by Git, but a web build can copy it into dist/;
+Git-ignored does not mean private after deployment.
+
+Set defaultDeviceId to an empty string in your local config if present. The
+current deployment workflow writes a legacy defaultDeviceId value of
+phone-stefana-01, which is not a VIN. If it appears in a deployed page's VIN
+input, clear that field and select the all-vehicles option before resuming live
+monitoring. That is a browser filter value, not the identity of a real phone.
+
+The current index.html has owner/VIN controls but no token-entry field. For
+this reviewed version, initialize its existing browser authentication store:
+
+1. Open the dashboard using its HTTP(S) URL, not file://.
+2. Open browser Developer Tools, then Console.
+3. Review and run the following JavaScript on that dashboard page. Enter the
+   privately supplied original owner token when prompted:
+
+   (() => {
+     const token = window.prompt('Enter the private Porsche demo token');
+     if (!token || !token.trim()) throw new Error('No token entered.');
+     localStorage.setItem('verity_drive_auth_v2', JSON.stringify({
+       ownerId: 'porsche',
+       vehicleId: 'WP0ZZZ99ZTS392124',
+       token: token.trim()
+     }));
+     window.location.reload();
+   })();
+
+This matches src/web/api.js and keeps the actual token out of source files and
+console command text. It is stored in this browser origin's localStorage, so
+use a trusted demo browser. A new browser/origin needs the same initialization.
+If config.js already contains apiToken, remove that property first because it
+can take precedence over saved browser authentication. Select all vehicles
+and clear any single-VIN filter to display both phones together.
+
+For local dashboard development, use exactly http://localhost:5173. The main
+Bicep file permits that origin; 127.0.0.1 and alternate ports are different
+origins and are not automatically included. The deployed website origin is
+added by the CD workflow. If needed, Adina can add it explicitly:
+
+   $DashboardOrigin = $DashboardUrl.TrimEnd('/')
+   az functionapp cors add --name $FunctionName --resource-group $ResourceGroup --allowed-origins $DashboardOrigin --output none; if ($LASTEXITCODE -ne 0) { throw 'CORS update failed.' }
+
+D. REPRODUCE THE AZURE ENVIRONMENT - ADINA / SQL ADMINISTRATOR
+
+D1. Inputs, identity, and main resources
+
+Run from the repository root with Azure CLI, Bicep, Node, and npm installed.
+Use an account permitted to provision resources and create role assignments.
+Use a supported region allowed by the subscription; the reference region is
+Austria East. The team setup has used rg-teamverity-eu; enter the actual resource group
+rather than assuming every account uses that name.
+
+   az login
+   $SubscriptionId = Read-Host 'Azure subscription ID'
+   az account set --subscription $SubscriptionId; if ($LASTEXITCODE -ne 0) { throw 'Subscription selection failed.' }
+   $ResourceGroup = Read-Host 'Existing or new resource group name'
+   $Location = 'austriaeast'
+   $FunctionName = 'teamverity-api-adina01utcn'
+   $SqlAdminLogin = Read-Host 'SQL Entra administrator user principal name'
+   $SqlAdminObjectId = Read-Host 'That user object ID in the subscription tenant'
+   $SqlAdminIp = Read-Host 'Public IPv4 of the workstation running SQL migrations'
+   $TenantJson = Read-Host 'Paste valid tenant JSON ARRAY containing token hashes only; [] only for new provisioning'
+   $null = ConvertFrom-Json -InputObject $TenantJson -ErrorAction Stop
+   if (!$TenantJson.Trim().StartsWith('[') -or !$TenantJson.Trim().EndsWith(']')) { throw 'Tenant configuration must be a JSON array.' }
+   az group create --name $ResourceGroup --location $Location --output none; if ($LASTEXITCODE -ne 0) { throw 'Resource group creation failed.' }
+
+For a new environment, generate the owner entry using C3 before these prompts,
+or provision initially with [] and configure credentials before operating it.
+For an existing environment, preserve its CURRENT tenant map and existing SQL
+server/database names. The default SQL server name is deterministic per group;
+if yours was customized, add its sqlServerName/sqlDatabaseName parameters.
+
+Create the ignored parameter file; values are supplied by the operator, not
+committed example secrets:
+
+   $Parameters = @{
+     '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'
+     contentVersion = '1.0.0.0'
+     parameters = @{
+       functionName = @{ value = $FunctionName }
+       location = @{ value = $Location }
+       sqlAdminLogin = @{ value = $SqlAdminLogin }
+       sqlAdminObjectId = @{ value = $SqlAdminObjectId }
+       sqlAdminIp = @{ value = $SqlAdminIp }
+       allowAzureServices = @{ value = $true }
+       demoTenantsJson = @{ value = $TenantJson }
+     }
+   }
+   $Parameters | ConvertTo-Json -Depth 10 | Set-Content infrastructure/private.parameters.json -Encoding utf8
+   $Infrastructure = az deployment group create --name teamverity-main --resource-group $ResourceGroup --template-file infrastructure/main.bicep --parameters '@infrastructure/private.parameters.json' --output json | ConvertFrom-Json; if ($LASTEXITCODE -ne 0) { throw 'Main infrastructure deployment failed.' }
+
+The allowAzureServices option admits Azure-origin SQL connections at the
+network layer for the hackathon setup; Entra authentication/database grants
+remain required. This template does not configure a private SQL network path.
+Basic SQL and Storage are billed services; subscription credits and regional
+availability must cover the selected resources. A globally unique Function
+App name is required when reproducing this project in a different account.
+
+D2. Configure GitHub OIDC and dashboard resources
+
+Reuse an already configured identity/credential. The following is the initial
+creation path. Keep the Azure CLI commands on single lines:
+
+   $IdentityName = 'teamverity-github'
+   $Repository = 'CAdinaDenisa/DataInfrastructure_TeamVerity'
+   $Identity = az identity create --name $IdentityName --resource-group $ResourceGroup --output json | ConvertFrom-Json; if ($LASTEXITCODE -ne 0) { throw 'Identity creation failed.' }
+   $FunctionId = az functionapp show --name $FunctionName --resource-group $ResourceGroup --query id --output tsv; if ($LASTEXITCODE -ne 0 -or !$FunctionId) { throw 'Function App lookup failed.' }
+   az role assignment create --assignee-object-id $Identity.principalId --assignee-principal-type ServicePrincipal --role 'Website Contributor' --scope $FunctionId --output none; if ($LASTEXITCODE -ne 0) { throw 'Function deployment role assignment failed.' }
+   az identity federated-credential create --name github-main --identity-name $IdentityName --resource-group $ResourceGroup --issuer 'https://token.actions.githubusercontent.com' --subject ('repo:' + $Repository + ':ref:refs/heads/main') --audiences 'api://AzureADTokenExchange' --output none; if ($LASTEXITCODE -ne 0) { throw 'GitHub federation setup failed; check whether this credential already exists.' }
+   $DashboardDeployment = az deployment group create --name teamverity-dashboard --resource-group $ResourceGroup --template-file infrastructure/dashboard.bicep --parameters location=$Location githubIdentityName=$IdentityName --output json | ConvertFrom-Json; if ($LASTEXITCODE -ne 0) { throw 'Dashboard infrastructure deployment failed.' }
+   $WebStorageName = $DashboardDeployment.properties.outputs.webStorageAccountName.value
+
+The dashboard template grants this identity Reader on the dashboard account
+and Storage Blob Data Contributor on its $web container. It enables static
+website hosting with index.html. Functions host storage remains separate.
+No Azure Static Web App resource or SWA_DEPLOYMENT_TOKEN is needed here.
+
+D3. Apply SQL migrations and the runtime identity grant
+
+Use the configured SQL Entra administrator, from the workstation permitted by
+the SQL firewall. Infrastructure creation alone does not create application
+tables or a database user for the Function identity.
+
+Important configuration precedence: a local SQL_CONNECTION_STRING overrides
+SQL_SERVER/SQL_DATABASE in config.js. For this CLOUD migration, remove any
+SQL_CONNECTION_STRING from the shell environment AND from the ignored
+src/backend/api/local.settings.json. Do not copy the local SQL example into
+this cloud setup. If switching between local and cloud work, preserve local
+settings privately and review this choice before running the migration.
+Do not set the GitHub deployment identity's client ID as the SQL runtime ID.
+
+From the repository root:
+
+   $SqlServer = $Infrastructure.properties.outputs.sqlServerFqdn.value
+   $SqlDatabase = $Infrastructure.properties.outputs.sqlDatabaseName.value
+   $env:SQL_SERVER = $SqlServer
+   $env:SQL_DATABASE = $SqlDatabase
+   Remove-Item Env:SQL_CONNECTION_STRING -ErrorAction SilentlyContinue
+   Remove-Item Env:AZURE_CLIENT_ID -ErrorAction SilentlyContinue
+   Push-Location src/backend/api
+   npm run db:migrate -- --grant-app $FunctionName
+   if ($LASTEXITCODE -ne 0) { throw 'SQL migration/grant failed; check administrator identity, firewall, and connection settings.' }
+   Pop-Location
+
+Confirm that 001_init.sql, 002_session_stats.sql, and 003_auth_and_payloads.sql
+are applied. The runner records applied migrations and skips those already
+recorded on subsequent runs. The configured runtime user needs CONNECT and
+SELECT/INSERT/UPDATE on dbo; it should not run migrations itself. This setup
+uses the current normalized schema, not the old single dbo.Telemetry example.
+
+D4. Configure and run GitHub Actions
+
+In repository Settings / Secrets and variables / Actions / Variables, set:
+
+- AZURE_CLIENT_ID: $Identity.clientId (not principalId).
+- AZURE_TENANT_ID: $Identity.tenantId.
+- AZURE_SUBSCRIPTION_ID: selected subscription ID.
+- AZURE_RESOURCE_GROUP: actual resource group name.
+- AZURE_FUNCTIONAPP_NAME: actual Function App name.
+- AZURE_WEB_STORAGE_NAME: $WebStorageName from D2.
+- ENABLE_DEPLOY: false while configuring; true when ready to publish.
+
+The deployment OIDC subject above requires main-branch runs and no GitHub
+Environment subject substitution. When forking the repository, change the
+repository subject and Azure variables to your own values.
+
+Ensure .github/workflows/ci-cd.yml is merged into main; a file directly under
+.github is not discovered as a workflow. Open Actions / TeamVerity CI and CD,
+choose Run workflow, select main, and run it with ENABLE_DEPLOY=true.
+
+Check BOTH jobs. Check API web and Bicep must pass, and Deploy API and dashboard
+must actually run and pass. A green overall run with deployment SKIPPED proves
+only the checks, not publication. CI compiles Bicep but does not apply it.
+CD does not migrate SQL or publish the Expo phone application.
+
+After publication, retrieve the actual URLs using C1, verify health, and
+complete client setup C2/C4. The workflow writes public API URL configuration
+into dist/config.js and uploads src/web/dist to the Storage website.
+
+E. PERSISTENT LOCAL DEVELOPMENT - STEFANA
+
+Run from src/backend/api. This is separate from the cloud migration path.
+
+   npm run setup:local
+   npm run db:up
+   docker compose -f ../database/docker-compose.yml ps
+
+setup:local is a one-time copy and intentionally fails if local.settings.json
+already exists; edit the existing file instead of overwriting it. Its example
+uses SQL at localhost:1433, database porsche_hecaton, development-only SQL
+credentials matching docker-compose.yml, and AUTH_MODE=disabled. These local
+credentials are not production Azure credentials. Wait until SQL is healthy,
+then run:
+
+   npm run db:migrate
+   npm start
+
+Keep that terminal open. Azurite runs alongside SQL for Functions host storage.
+The API listens on http://localhost:7071. The local dashboard uses an ignored
+config.js with apiBaseUrl=http://localhost:7071/api. For a real phone on the
+same LAN, use the laptop's reachable IPv4 address at port 7071 instead of
+localhost, with appropriate local firewall access. An Expo tunnel forwards
+Metro, not this API. Azure HTTPS is the simpler cross-network phone setup.
+
+F. MEMORY MODE WITHOUT LOCAL SQL
+
+This is for processing/UI development; it is not the persistent cloud demo.
+Run Azurite for host storage (Docker or an independent Azurite installation).
+For the latter, install it once and run it in its own terminal:
+
+   npm install --global azurite
+   azurite --skipApiVersionCheck
+
+From src/backend/api create local.settings.json if absent using setup:local.
+In Values, set STORAGE_MODE=memory and AUTH_MODE=disabled. Keep
+AzureWebJobsStorage=UseDevelopmentStorage=true for Azurite, then run npm start.
+No SQL migration is needed. Health reports storageMode=memory and data is lost
+when this API process restarts. Do not label that as Azure SQL persistence.
+
+For either local backend path, the current mobile/dashboard clients still
+expect a non-empty token. Use a clearly local-only value such as local-demo
+in the phone input and dashboard browser authentication setup while the LOCAL
+API explicitly has AUTH_MODE=disabled. Never disable Azure authorization to
+work around an unknown-token or vehicle-permission failure.
+
+G. KEEP PRIVATE SETTINGS OUT OF THE SUBMISSION
+
+Do not commit .env, local.settings.json, infrastructure/private.parameters.json,
+or real owner tokens. Existing ignore rules cover those paths. Keep config.js
+free of real tokens because builds can publish its contents. Obtain the
+original demo token privately; a hash cannot be used as that original token.
+
+For subsequent launches and the two-phone demonstration, follow
+instructions for running the solution.txt. Application-specific technical
+notes remain in src/backend/docs/ and src/web/README.md; where an older note
+conflicts, the reviewed executable configuration takes precedence.

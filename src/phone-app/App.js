@@ -17,7 +17,7 @@ import CarShowcase from './src/CarShowcase';
 import Compass from './src/Compass';
 import GMeter from './src/GMeter';
 import { relativeAltitude } from './src/altitude';
-import { API_URL, BASELINE_SAMPLES, CAPTURE_INTERVAL_MS } from './src/config';
+import { API_URL, API_TOKEN, BASELINE_SAMPLES, CAPTURE_INTERVAL_MS } from './src/config';
 import { buildEvent, stableAverage } from './src/event';
 import VinSetup from './src/VinSetup';
 import { MODEL, OWNER, loadVin, normalizeVin, saveVin, vinError } from './src/vehicle';
@@ -55,8 +55,6 @@ function CarScreen() {
   const [phoneId, setPhoneId] = useState(null);
   const [sensorStatus, setSensorStatus] = useState({ acceleration: 'checking', magneticField: 'checking', pressure: 'checking' });
   const [readings, setReadings] = useState({ acceleration: null, magneticField: null, pressure: null });
-  const [token, setToken] = useState(''); // doar în memorie, niciodată salvat
-  const [showToken, setShowToken] = useState(false);
   const [tracking, setTracking] = useState(false);
   const [sending, setSending] = useState(false); // butonul Start/Stop: trimitem sau nu la Azure
   const [sessionId, setSessionId] = useState(null);
@@ -79,11 +77,11 @@ function CarScreen() {
   const captureTimer = useRef(null);
   const uiTimer = useRef(null);
   const statusRef = useRef(null); // null până se verifică senzorii
-  const contextRef = useRef({ ownerId: OWNER.id, vehicleId: null, token: '' });
+  const contextRef = useRef({ ownerId: OWNER.id, vehicleId: null, phoneId: null, token: API_TOKEN });
 
-  useEffect(() => {
-    contextRef.current = { ownerId: OWNER.id, vehicleId: vin ?? null, token };
-  }, [vin, token]);
+useEffect(() => {
+  contextRef.current = { ownerId: OWNER.id, vehicleId: vin ?? null, phoneId: phoneId ?? null, token: API_TOKEN };
+}, [vin, phoneId]);
 
   const sender = useMemo(
     () =>
@@ -131,7 +129,7 @@ function CarScreen() {
   const capture = useCallback(async () => {
     if (!trackingRef.current || !sendingRef.current) return; // trimiterea e oprită din buton
     const status = statusRef.current;
-    const { ownerId, vehicleId } = contextRef.current;
+    const { ownerId, vehicleId, phoneId: devId } = contextRef.current;
     if (!vehicleId || !latest.current.acceleration) return; // accelerometrul e obligatoriu
     if (status.pressure === 'live' && baselineRef.current == null) return; // încă se calibrează presiunea
 
@@ -141,17 +139,17 @@ function CarScreen() {
       return;
     }
 
-    const event = buildEvent({
-      eventId: newId(),
-      deviceId: vehicleId, // telefonul ESTE mașina: seria de șasiu e ID-ul ei
-      ownerId,
-      vehicleId,
-      sessionId: sessionRef.current,
-      now: new Date(),
-      readings: latest.current,
-      status,
-      baselineHpa: baselineRef.current,
-    });
+   const event = buildEvent({
+  eventId: newId(),
+  deviceId: devId || vehicleId, // fiecare telefon are ID-ul lui unic
+  ownerId,
+  vehicleId,
+  sessionId: sessionRef.current,
+  now: new Date(),
+  readings: latest.current,
+  status,
+  baselineHpa: baselineRef.current,
+});
 
     const ok = await Queue.enqueue(event); // salvat ÎNAINTE de trimitere
     if (!ok) {
@@ -200,7 +198,7 @@ function CarScreen() {
       await Queue.load();
       if (!alive) return;
       statusRef.current = status;
-      contextRef.current = { ...contextRef.current, vehicleId: savedVin };
+      ccontextRef.current = { ...contextRef.current, vehicleId: savedVin, phoneId: id };
       setPhoneId(id);
       setSensorStatus(status);
       setVin(savedVin);
@@ -287,28 +285,7 @@ function CarScreen() {
           <Text style={styles.vinHeader}>{vin}</Text>
         </Pressable>
 
-        {!sending ? (
-          <View style={styles.tokenMain}>
-            <Text style={styles.inputLabel}>Cheie server (token) – se pune înainte de Pornește</Text>
-            <View style={styles.tokenRow}>
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
-                value={token}
-                onChangeText={(t) => setToken(t.trim())}
-                secureTextEntry={!showToken}
-                autoCapitalize="none"
-                autoCorrect={false}
-                placeholder="lipește aici cheia"
-                placeholderTextColor="#55607a"
-              />
-              <Pressable onPress={() => setShowToken((v) => !v)} style={styles.eye}>
-                <Text style={styles.eyeText}>{showToken ? 'Ascunde' : 'Arată'}</Text>
-              </Pressable>
-            </View>
-          </View>
-        ) : (
-          <Text style={styles.tokenSet}>{token ? '🔑 cheie setată' : '🔑 fără cheie'}</Text>
-        )}
+      
         <Pressable
           onPress={toggleSending}
           disabled={!tracking}
@@ -376,23 +353,8 @@ function CarScreen() {
                   <Text style={styles.cardTitle}>Mașina acestui telefon</Text>
                   <Row k="Serie de șasiu" v={vin} />
                   <Btn label="Schimbă seria de șasiu" onPress={changeVin} />
-                  <Text style={styles.inputLabel}>Cheie server (DEVICE_API_KEY)</Text>
-                  <View style={styles.tokenRow}>
-                    <TextInput
-                      style={[styles.input, { flex: 1 }]}
-                      value={token}
-                      onChangeText={setToken}
-                      secureTextEntry={!showToken}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      placeholder="goală dacă serverul nu cere cheie"
-                      placeholderTextColor="#55607a"
-                    />
-                    <Pressable onPress={() => setShowToken((v) => !v)} style={styles.eye}>
-                      <Text style={styles.eyeText}>{showToken ? 'Ascunde' : 'Arată'}</Text>
-                    </Pressable>
                   </View>
-                </View>
+                  
 
                 <View style={styles.card}>
                   <Text style={styles.cardTitle}>Trimitere</Text>

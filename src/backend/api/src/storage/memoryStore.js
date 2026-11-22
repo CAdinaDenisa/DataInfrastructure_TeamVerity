@@ -37,6 +37,14 @@ function createMemoryStore() {
       return sessions.get(sessionId) || null;
     },
 
+    async getActiveVehicleSession(vehicleId, activeWindowSec = 30) {
+      const cutoff = new Date(Date.now() - activeWindowSec * 1000).toISOString();
+      const active = [...sessions.values()]
+        .filter((s) => s.vehicleId === vehicleId && s.lastEventAt && s.lastEventAt >= cutoff)
+        .sort((a, b) => b.lastEventAt.localeCompare(a.lastEventAt));
+      return active[0] || null;
+    },
+
     async saveBatch(batch, state, sessionUpdate) {
       if (batches.has(batch.batchId)) return { duplicate: true, existingHash: batches.get(batch.batchId).hash };
       const first = batch.events[0].timestamp;

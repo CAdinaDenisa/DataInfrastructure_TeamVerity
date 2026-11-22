@@ -48,11 +48,16 @@ export function createSender({ getContext, onStatus }) {
           onStatus({ state: 'acked', eventId: next.eventId, status: result.status, atUtc: new Date().toISOString() });
           continue;
         }
-        if (result.kind === 'invalid' || result.kind === 'conflict') {
+        if (result.kind === 'invalid') {
           // eroare permanentă pentru ACEST eveniment: îl mutăm vizibil la „respinse” și continuăm
           await Queue.reject(next.eventId, result.message);
           onStatus({ state: 'error', message: result.message, eventId: next.eventId });
           continue;
+        }
+        if (result.kind === 'conflict') {
+          authBlocked = true; // VIN ocupat de alt telefon (409) — oprim trimiterea până la Retry
+          onStatus({ state: 'error', message: result.message });
+          break;
         }
         if (result.kind === 'auth' || result.kind === 'config') {
           authBlocked = true; // nu mai încercăm până nu se corectează token-ul / URL-ul și apeși Retry
