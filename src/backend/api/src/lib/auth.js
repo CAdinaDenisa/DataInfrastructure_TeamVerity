@@ -67,7 +67,7 @@ function authenticate(headers, now = new Date()) {
     ok: true,
     principal: {
       all: false,
-      allowAllVehicles: vehicleIds.has('*'),
+      allowAllVehicles: vehicleIds.size === 0 || vehicleIds.has('*'),
       ownerId: tenant.ownerId,
       vehicleIds,
     },

@@ -1,0 +1,306 @@
+TEAMVERITY - VERITY DRIVE
+INSTRUCTIONS FOR RUNNING THE SOLUTION
+
+Repository: https://github.com/CAdinaDenisa/DataInfrastructure_TeamVerity
+Source baseline: main, commit 9352946af6e8a1b01d45f3ce95e5772622165665.
+Complete setup and installation.txt once before following this runbook.
+
+1. DEMONSTRATION OVERVIEW
+
+The demonstration uses two real phones, one vehicle VIN per phone, the Azure
+Functions API, Azure SQL Database, and the browser dashboard. Phone readings
+are captured locally, sent as JSON over HTTPS, processed/stored by the API,
+and read back through API queries. Multiple vehicle cards show each VIN's
+latest state and stored sessions separately.
+
+Responsibilities:
+- Ana: launch both mobile clients, configure distinct VINs, grant permissions,
+  and verify acknowledgments/queued events.
+- Stefana: verify API health, authorization, writes, and stored session data.
+- Daniela: connect the dashboard, select both vehicles, and show historical
+  session reports/charts/3D views.
+- Adina: verify cloud addresses/settings, deployment, identity permissions,
+  SQL setup, and CORS; retain evidence for the submission.
+
+2. BEFORE THE JUDGING SESSION
+
+The operator supplies the actual API base URL, the dashboard URL, and an
+unexpired original Porsche demo token privately. Public documentation/source
+contains no usable token. Judges viewing the hosted dashboard do not need an
+Azure subscription login or local SQL installation.
+
+Adina / Stefana verify:
+- The Function App is running at its actual defaultHostName, not a guessed URL.
+- GET <actual API base URL>/api/health returns HTTP 200 JSON with:
+    status: ok
+    storageMode: sql
+    database: ok
+    auth: enabled
+- DEMO_TENANTS_JSON contains the hash matching the token used by the clients,
+  ownerId=porsche, and both exact demonstration VINs. Its expiry is future.
+- SQL migrations and the Function App identity grant have been applied.
+- The dashboard origin is permitted by the Function App's CORS configuration.
+- The published Functions app includes health and telemetry endpoints.
+- Any GitHub deployment claimed as evidence has a successful DEPLOY job;
+  an overall green run with deployment skipped is only CI evidence.
+
+Use the address and health commands in setup section C1. That check is public
+and requires no owner token. Do not troubleshoot phone tokens while the target
+address itself returns a 404 for the expected API routes.
+
+3. LAUNCH THE MOBILE APPLICATION - ANA
+
+On the development computer, open a terminal in src/phone-app:
+
+   npm start
+
+For a clean reload after configuration/source changes:
+
+   npx expo start -c
+
+If LAN discovery of Metro is blocked, an optional development alternative is:
+
+   npx expo start --tunnel
+
+Open the QR code in compatible Expo Go on each physical phone. Keep Metro
+running. The tunnel exposes Metro's development bundle; it does not expose a
+separate local API. Both clients can use the same deployed Azure HTTPS API.
+
+For phone 1:
+1. Configure VIN WP0ZZZ99ZTS392124 (or the actual approved VIN for that phone).
+2. Grant available motion/location permissions and enable location services
+   when GPS position/route data is part of the demonstration.
+3. Enter the ORIGINAL owner token in the token field. Do not enter its SHA-256
+   hash, quotation marks, or the word Bearer. The app constructs the header.
+4. Press 'Porneste trimiterea' / 'Pornește trimiterea' (Start sending).
+5. Keep the app foregrounded and wait for acknowledgments. Move/tilt the phone
+   gently to change sensor readings. GPS movement requires a location fix;
+   rotating a stationary phone does not demonstrate a GPS route.
+
+For phone 2, repeat with a DIFFERENT approved VIN, for example
+WP0ZZZY1ZNSA54819. Both can use the same Porsche owner token when the server
+entry permits both VINs. Do not reuse a VIN for two supposedly independent
+vehicle streams: the VIN is sent as both deviceId and vehicleId.
+
+The current capture interval is 2 seconds; hardware sensor samples are
+requested every 500 ms. After stopping/reloading/reopening the app, check the
+token input again because the UI token is stored only in memory.
+
+4. CHECK THE PHONE'S DIAGNOSTICS
+
+Tap the gear/settings control and inspect the diagnostic panel. Relevant
+Romanian labels and expected observations:
+
+- Motor / pornit: capture engine is on.
+- Sesiune (cursa): the current session/trip identifier.
+- Capturate in cursa: events captured during the current trip.
+- In coada: pending queued events; it should drain as requests are acknowledged.
+- Expediere: sending status. A blocked/error state requires attention.
+- Ultima confirmare: last server acknowledgment, including event ID/status/time.
+- API: the configured backend address; compare it with the actual Azure host.
+- deviceId trimis: transmitted VIN, not the phone's internal diagnostic UUID.
+- Retry: retry queued events after correcting configuration/authorization.
+- Recalibrare altitudine: reset the relative-altitude baseline where supported.
+- Inchide: close the diagnostic panel, not the API service.
+
+Expected successful ingestion: 201 for a new stored event, or 200 when retrying
+an identical already-stored event. Pending events are removed only after an
+acknowledgment. The code retries transient failures with backoff and retains
+pending events. Authorization/configuration failures require correction and
+manual Retry. Invalid/conflicting events can be moved to the visible rejected
+queue; inspect the reason rather than treating them as uploaded records.
+
+Keep the application foregrounded. Background/closed-app capture is not the
+intended demonstration mode. Do not clear queues just to hide a failed test.
+
+5. OPEN AND AUTHORIZE THE DASHBOARD - DANIELA
+
+Cloud option: open the HTTPS dashboard URL supplied by Adina.
+Local dashboard against the cloud API: from src/web run:
+
+   npm start
+
+Then open exactly http://localhost:5173. Do not double-click index.html or use
+an unapproved alternate browser origin. Review config.js as described in setup
+section C4; its apiBaseUrl includes /api, unlike the phone's base URL.
+
+Current-version authentication note: the index page at the reviewed commit
+has no token-entry field. Before first use in a browser/origin, initialize its
+existing localStorage authentication using setup section C4's browser-console
+snippet and the privately supplied original token. Do not publish a token in
+config.js to work around the missing UI control. For local AUTH_MODE=disabled
+only, the clients can use the explicitly local value local-demo.
+
+Once authenticated:
+1. Use Owner ID porsche.
+2. Select the all-vehicles/all-chassis option and clear a single-VIN input to
+   display the full owner fleet. Clear any old phone-stefana-01 filter value;
+   that legacy default is not one of the vehicle VINs.
+3. Use 'Reia Live' (Resume live) when monitoring is paused. The startup page
+   also attempts connection automatically when it has an authentication value.
+4. Vehicles with stored device/session data are discovered through the API.
+   If needed, enter an approved VIN and use the add-vehicle control.
+5. Confirm both distinct VINs appear and receive separate updates.
+6. Show the latest available readings, update status/time, 3D view, and trip
+   report rows. Open a report row to inspect its stored track/charts/readings.
+
+The normal telemetry polling interval is about 3 seconds and session refresh
+about 20 seconds (configuration defaults can vary). Polling can pause after
+repeated stale observations; use Resume live after starting a new stream.
+A card containing a name/image alone is not evidence of a successful upload.
+Do not claim two live vehicles until each has current acknowledged records.
+
+6. JURY DEMONSTRATION SEQUENCE AND ACCEPTANCE CHECKS
+
+1. Show the architecture and the healthy API response (SQL mode).
+2. Start phone 1 and show one acknowledged event and its VIN/session ID.
+3. Start phone 2 with the other VIN and show its acknowledgment.
+4. Display both VINs together in the dashboard. Tilt one phone while leaving
+   the other still; show that the associated vehicle's values change separately.
+5. Where GPS/sensor capabilities permit, collect a short second session and
+   open a historical report/track. Show timestamps and stored readings.
+6. Refresh the dashboard. Historical records should remain available from SQL;
+   labels cached by the browser alone do not demonstrate database persistence.
+7. Show the Bicep files and GitHub Actions checks/deployment evidence. Confirm
+   the deployment job ran rather than relying only on the overall green icon.
+8. Explain device limitations and the distinction between this demonstrator
+   and a validated real-vehicle instrument/maintenance assessment.
+
+Stefana can independently confirm recent ingestion using the authorized
+telemetry query or a read-only SQL check. Example SQL (database administrator
+or other authorized reader; no token belongs in this query):
+
+   SELECT TOP (20) owner_id, vehicle_id, captured_at, batch_id
+   FROM dbo.batches
+   WHERE owner_id = N'porsche'
+   ORDER BY captured_at DESC;
+
+Actual end-to-end acceptance requires two distinct VINs with successful writes
+and read-back. Automated memory tests alone do not certify phone permissions,
+live Azure SQL identity/firewall, or browser CORS.
+
+7. LOCAL REPRODUCTION AND SIMULATOR
+
+For persistent local mode, complete setup E. In terminal A, from
+src/backend/api, keep the API running:
+
+   npm start
+
+In terminal B, from src/web, serve the dashboard:
+
+   npm start
+
+Use config.js apiBaseUrl=http://localhost:7071/api and the local browser token
+setup. The copied local API settings explicitly disable authentication; do not
+copy this disabled-auth setting to Azure. Local health should report sql when
+using Docker SQL, or memory when intentionally using setup F.
+
+In terminal C, from src/backend/api, optional current-timestamp simulator:
+
+   npm run simulate -- --owner porsche --vehicle WP0ZZZ99ZTS392124 --device WP0ZZZ99ZTS392124 --seconds 30
+
+To exercise another independent test stream/session:
+
+   npm run simulate -- --owner porsche --vehicle WP0ZZZY1ZNSA54819 --device WP0ZZZY1ZNSA54819 --seconds 30
+
+These simulator commands target localhost:7071 by default and need no token
+only when local AUTH_MODE=disabled. They create SYNTHETIC sensor data and must
+be identified as simulation. They are useful before a real-phone demonstration.
+The example JSON files have fixed timestamps; the simulator avoids relying on
+stale sample timestamps that validation may reject.
+
+For a real phone against a local API, use the laptop's reachable LAN/API tunnel
+address, not localhost on the phone. Keep the appropriate firewall/network
+access configured. The phone must retain its actual sensor permissions.
+
+8. AUTOMATED CHECKS AND BUILD COMMANDS
+
+From src/backend/api:
+
+   npm run ci
+
+This runs syntax/schema/migration checks and default automated tests. For SQL
+integration checks, first start/migrate local SQL (setup E), then run:
+
+   npm run test:sql
+
+From src/web:
+
+   npm run check
+   npm run build
+
+The static artifact is src/web/dist/. A local build can use config.example.js
+as fallback; set the actual config and review dist/config.js before publishing.
+The submitted CD workflow generates its own public configuration after build.
+
+From the repository root:
+
+   az bicep build --file infrastructure/main.bicep --outfile infrastructure/main.json
+   $DashboardTemplateOut = Join-Path ([System.IO.Path]::GetTempPath()) 'teamverity-dashboard.json'
+   az bicep build --file infrastructure/dashboard.bicep --outfile $DashboardTemplateOut
+
+These commands compile templates only; they do not provision resources.
+
+Verified source-baseline checks while preparing these instructions:
+- Backend checks and 42 automated tests passed; 2 SQL tests were skipped because
+  no local SQL test connection was configured for that verification run.
+- Dashboard JavaScript checks and build passed.
+- Both Bicep templates compiled successfully without provisioning resources.
+These results do not assert a successful physical-phone/cloud demonstration.
+
+9. TROUBLESHOOTING BY OBSERVED ERROR
+
+401 / Token necunoscut / Token expirat:
+The token is missing, unknown, invalidly configured, or expired. Match the
+original token to the real 64-hex SHA-256 hash in DEMO_TENANTS_JSON. Do not paste
+the hash into the phone. Preserve the right token input precedence and remove
+an unintended old EXPO_PUBLIC_API_TOKEN fallback. Check auth in /api/health.
+
+403 / Tokenul nu are acces la acest vehicul:
+A recognized credential is not permitted for the requested VIN/owner. Keep the
+working token/hash and add the exact actual VIN to that entry's vehicleIds.
+Preserve ownerId=porsche and other owners' entries. Save Azure settings, allow
+the restart, then Retry. Explicit VINs work without relying on wildcard changes.
+
+404 / adresa nu exista:
+Compare the phone API URL to Azure's actual defaultHostName. Phone config must
+not append /api itself. Verify /api/health and registered functions; deploy the
+current src/backend/api package if endpoints are missing. A skipped CD job has
+not published code. A root URL 404 alone is not decisive; test the named routes.
+
+503 / database unreachable:
+The route exists but backend storage is unavailable. Check SQL_SERVER FQDN,
+SQL_DATABASE, schema, the Function App identity grant, and SQL networking. Keep
+that identity distinct from the GitHub deployment identity.
+
+Browser fetch/CORS failure:
+Use an HTTP(S)-served page and an explicitly allowed Function App origin.
+localhost and 127.0.0.1, or different ports, are different origins. Confirm API
+availability separately; a browser message alone does not prove CORS is the
+only cause. CORS is not the fix for an application-generated native-phone 401.
+
+Empty fleet / no live updates:
+Confirm acknowledged records and correct owner/VINs. Set all-vehicle selection,
+clear legacy filters, initialize browser auth on this origin, and resume live
+polling. Check the dashboard's Network requests, timestamps, and paused status.
+A missing GPS fix can leave a route stationary even when other sensors update.
+
+409 / invalid event:
+409 means the same event ID was reused with different content. Keep retries
+identical. Inspect validation/rejected-event details rather than editing and
+resubmitting an old ID as a different measurement.
+
+10. STOPPING THE DEMO
+
+- Stop phone capture/sending with its Stop control and verify its queue state.
+- Stop local Expo, API, and web terminals with Ctrl+C.
+- From src/backend/api, npm run db:down stops local containers while retaining
+  the SQL volume. Do not remove volumes when intending to keep the demo data.
+- Clear the browser demo credential after a shared-computer session:
+
+   localStorage.removeItem('verity_drive_auth_v2');
+
+  Run that JavaScript in the dashboard's browser console; it does not delete SQL
+  records. Reinitialize browser authentication before the next demonstration.
+- Stopping local terminals does not remove or stop billed Azure resources.
+  Adina owns post-event resource cleanup after required evidence

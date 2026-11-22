@@ -54,9 +54,24 @@ async function ingest({ body, principal = OPEN, store, now = new Date() }) {
     }
   }
 
+  
   const session = (await store.getSession(batch.sessionId)) || {};
   if (session.deviceId && session.deviceId !== batch.deviceId) {
     return { status: 400, jsonBody: { error: `sessionId ${batch.sessionId} aparține altui deviceId` }, logFields };
+  }
+
+  if (batch.vehicleId && store.getActiveVehicleSession) {
+    const active = await store.getActiveVehicleSession(batch.vehicleId, 30);
+    if (active && active.deviceId && active.deviceId !== batch.deviceId) {
+      return {
+        status: 409,
+        jsonBody: {
+         error: `Vehiculul ${batch.vehicleId} transmite deja de pe un alt telefon activ.`,
+          vehicleId: batch.vehicleId,
+        },
+        logFields: { ...logFields, outcome: 'vehicle_locked' },
+      };
+    }
   }
   const { state, sessionUpdate } = processBatch(batch, session);
   const { stats, distanceM } = updateSessionStats(session, state);
