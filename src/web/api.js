@@ -17,7 +17,6 @@ export function apiBase() {
     return DEFAULT_API_BASE;
   }
   const base = raw.replace(/\/+$/, "");
-  // toate rutele backend-ului sunt sub /api; dacă în config s-a pus doar adresa Function App, o adăugăm noi
   try {
     if (new URL(base).pathname === "/") return `${base}/api`;
   } catch (_) {}
@@ -25,7 +24,6 @@ export function apiBase() {
 }
 
 function presetToken() {
-  // acceptă și tokenul scris între < > (ca în exemplele din documentație)
   const raw = (appConfig().apiToken || "").trim().replace(/^<(.*)>$/, "$1").trim();
   if (!raw || raw.includes("<") || raw.includes("PUNE_TOKENUL")) {
     return "";
@@ -62,7 +60,6 @@ export function saveAuth(auth) {
   );
 }
 
-// Flota pornește goală (fără mașini hardcodate) și se populează automat din baza de date
 export function loadFleet() {
   try {
     const saved = localStorage.getItem(FLEET_KEY);
@@ -156,7 +153,6 @@ export const api = {
     });
   },
 
-  // GET /devices?ownerId= -> telefoanele (VIN-urile) firmei care au trimis date
   devices(auth) {
     return requestJson("/devices", { auth, query: { ownerId: auth.ownerId || "porsche" } });
   },
@@ -178,17 +174,14 @@ export const api = {
     });
   },
 
-  // backend-ul are doar GET /sessions/{id} (nu există /devices/{id}/sessions/{id})
   sessionDetail(auth, sessionId) {
     return requestJson(`/sessions/${encodeURIComponent(sessionId)}`, { auth });
   },
 
-  // GET /sessions/{id}/track?points=N -> { summary, totalPoints, points: [...] } (pentru raport)
   sessionTrack(auth, sessionId, points = 300) {
     return requestJson(`/sessions/${encodeURIComponent(sessionId)}/track`, { auth, query: { points } });
   },
 
-  // GET /devices/{id}/readings?type=&sessionId= -> citirile brute ale unui senzor (graficele din raport)
   readings(auth, deviceId, { type, sessionId, limit = 2000 } = {}) {
     return requestJson(`/devices/${encodeURIComponent(deviceId)}/readings`, {
       auth,
@@ -201,15 +194,11 @@ export async function loadSessionsByVehicle(auth, deviceIds = []) {
   const byVehicle = {};
   const allSessions = [];
 
-  // Backend-ul NU are o rută generală /sessions: listăm sesiunile per dispozitiv (VIN),
-  // cu /devices/{VIN}/sessions. VIN-urile vin din: config/flotă, telemetria văzută și GET /devices (telefoanele firmei).
   const ids = new Set(deviceIds.filter(Boolean).map((d) => String(d).trim()));
   try {
     const devices = await api.devices(auth);
     (Array.isArray(devices) ? devices : []).forEach((d) => d?.deviceId && ids.add(String(d.deviceId).trim()));
-  } catch (_) {
-    /* fără listă de dispozitive: rămânem la VIN-urile cunoscute */
-  }
+  } catch (_) {}
   const lists = await Promise.all(
     [...ids].map((devId) =>
       api.sessions(auth, { deviceId: devId, limit: 50 }).then(
@@ -241,7 +230,7 @@ export async function loadSessionsByVehicle(auth, deviceIds = []) {
     list.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))
   );
 
-  return { byVehicle };
+  return { byVehicle, deviceIds: [...ids] };
 }
 
 // ---------------------------------------------------------------- Formatare UI
@@ -292,6 +281,7 @@ export function fmtTime(iso) {
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
+
 export function fmtKm(n) {
   return Math.round(Number(n) || 0).toLocaleString("ro-RO");
 }
