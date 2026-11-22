@@ -21,16 +21,16 @@ import { statsFromSessions, buildRecommendations, renderRecommendations } from "
 // ======================================================================
 //  Verity Drive — Starea paginii
 //  Flota = VIN-urile detectate automat din baza de date
-//  Traseul live = GET /telemetry (se oprește automat când telefonul dă Stop)
+//  Traseul live = GET /telemetry în timp real
 // ======================================================================
 const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/;
-const LIVE_WINDOW_MS = 60 * 1000;
-const STALE_POLLS_BEFORE_STOP = 3; // Oprește polling-ul după 3 citiri fără date noi
+const LIVE_WINDOW_MS = 4500; // 4.5 secunde: trecere aproape instantanee în „Finalizat” la oprirea telefonului
+const DIST_SCALE = 2.6;      // calibrare distanță pentru estimarea inertiala la mers pe jos / test
 
 let fleet = loadFleet();
 let auth = loadAuth();
 const scenes = {};
-const live = {}; // vin -> { lastEventId, latest, points, error, receivedAt, staleCount }
+const live = {}; // vin -> { lastEventId, sessionId, latest, points, error, receivedAt, localSeenAt, wasLive }
 let sessionsByVin = {};
 let seenDeviceIds = new Set();
 let connected = false;
@@ -38,8 +38,8 @@ let pollingPaused = false;
 let lastSessionsLoad = 0;
 let healthInfo = null;
 
-const pollMs = Math.max(1000, Number(appConfig().pollIntervalMs) || 2000);
-const sessionsRefreshMs = Math.max(5000, Number(appConfig().sessionsRefreshMs) || 20000);
+const pollMs = Math.max(500, Number(appConfig().pollIntervalMs) || 700);
+const sessionsRefreshMs = Math.max(2000, Number(appConfig().sessionsRefreshMs) || 3000);
 
 // ---------------------------------------------------------------- elemente UI
 const ownerInput = document.getElementById("api-owner-input");
@@ -129,6 +129,7 @@ vinSelect?.addEventListener("change", () => {
 });
 
 const addVinBtn = document.getElementById("add-vin-btn");
+addVinBtn?.addEventListener("click", handleAddOrFocusVin);
 
 function handleAddOrFocusVin() {
   persistAuthFromUI();
@@ -143,7 +144,6 @@ function handleAddOrFocusVin() {
   const isNew = addCarIfMissing(auth.vehicleId);
   syncVinSelector();
   renderFleet();
-  if (live[auth.vehicleId]) live[auth.vehicleId].staleCount = 0;
   pollingPaused = false;
   if (!connected) {
     connect();
@@ -172,6 +172,10 @@ connectBtn?.addEventListener("click", () => {
     setBadge("Oprit manual", false);
     setHint("Monitorizarea live a fost oprită. Apasă „Reia Live” când pornești cursa.");
     updateConnectButton();
+    fleet.forEach((car) => {
+      drawLive(car);
+      renderReportsAndRecs(car);
+    });
     return;
   }
 
@@ -184,10 +188,6 @@ connectBtn?.addEventListener("click", () => {
     syncVinSelector();
     renderFleet();
   }
-  // Resetăm contoarele de inactivitate la pornire manuală
-  Object.values(live).forEach((entry) => {
-    entry.staleCount = 0;
-  });
   pollingPaused = false;
   connect();
 });
@@ -235,6 +235,34 @@ async function connect() {
 }
 
 // ---------------------------------------------------------------- telemetrie live
+function isEntryLive(entry) {
+  if (pollingPaused || !entry?.receivedAt) return false;
+  const serverFresh = Date.now() - Date.parse(entry.receivedAt) <= LIVE_WINDOW_MS;
+  const localFresh = entry.localSeenAt ? Date.now() - entry.localSeenAt <= LIVE_WINDOW_MS : serverFresh;
+  return serverFresh && localFresh;
+}
+
+function calcPathStats(points) {
+  if (!points || points.length === 0) return { distanceM: 0, durationSec: 0, maxAltRelM: 0 };
+  let rawDist = 0;
+  let maxAlt = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i].altitude ?? points[i].z ?? 0;
+    if (a > maxAlt) maxAlt = a;
+    if (i > 0) {
+      rawDist += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+    }
+  }
+  const t0 = Date.parse(points[0].t);
+  const t1 = Date.parse(points[points.length - 1].t);
+  const durationSec = Number.isFinite(t0) && Number.isFinite(t1) ? Math.max(1, Math.round((t1 - t0) / 1000)) : 0;
+  return {
+    distanceM: rawDist * DIST_SCALE,
+    durationSec,
+    maxAltRelM: maxAlt
+  };
+}
+
 function eventToPoint(e) {
   const d = e.derived || {};
   const pos = d.position || {};
@@ -256,7 +284,15 @@ function eventToPoint(e) {
 
 async function refreshLive(car) {
   const vin = car.vin;
-  const entry = (live[vin] ||= { lastEventId: null, points: [], latest: null, error: null, staleCount: 0 });
+  const entry = (live[vin] ||= {
+    lastEventId: null,
+    sessionId: null,
+    points: [],
+    latest: null,
+    error: null,
+    localSeenAt: 0,
+    wasLive: false
+  });
   try {
     const res = await api.telemetry(auth, vin, { limit: 200 });
     entry.error = null;
@@ -267,28 +303,45 @@ async function refreshLive(car) {
     entry.receivedAt = latest?.receivedAtUtc || null;
 
     if (!latest) {
-      entry.staleCount = (entry.staleCount || 0) + 1;
       updateOverlay(car);
       return false;
     }
 
-    const latestId = `${latest.eventId || latest.batchId}|${latest.receivedAtUtc}`;
-    const isFreshTimestamp = Date.now() - Date.parse(entry.receivedAt) <= LIVE_WINDOW_MS;
+    const latestId = `${latest.eventId || latest.batchId || ""}|${latest.receivedAtUtc || ""}`;
+    const isFreshServer = Date.now() - Date.parse(entry.receivedAt) <= LIVE_WINDOW_MS;
 
     if (latestId !== entry.lastEventId) {
+      const isFirstLoad = entry.lastEventId === null;
       entry.lastEventId = latestId;
-      entry.staleCount = isFreshTimestamp ? 0 : (entry.staleCount || 0) + 1;
+      entry.localSeenAt = isFreshServer ? Date.now() : 0;
+
+      const prevLen = entry.sessionId === latest.sessionId ? entry.points.length : 0;
+      entry.sessionId = latest.sessionId;
       entry.points = events
         .filter((e) => e.sessionId === latest.sessionId)
         .reverse()
         .map(eventToPoint)
         .filter(Boolean);
-      drawLive(car);
-      return isFreshTimestamp;
+
+      const addedPoints = !isFirstLoad && prevLen > 0 ? entry.points.slice(prevLen) : [];
+      entry.wasLive = isEntryLive(entry);
+      drawLive(car, addedPoints);
+      // Actualizăm imediat și tabelul din datele live, fără să așteptăm backend-ul /sessions
+      renderReportsAndRecs(car);
+      return true;
     } else {
-      entry.staleCount = (entry.staleCount || 0) + 1;
-      updateOverlay(car);
-      return false;
+      const nowLive = isEntryLive(entry);
+      const justStopped = entry.wasLive && !nowLive;
+      entry.wasLive = nowLive;
+
+      const scene = scenes[car.vin];
+      if (!nowLive && scene && scene.pts.length > 0) {
+        drawLive(car);
+      } else {
+        updateOverlay(car);
+      }
+      if (justStopped) renderReportsAndRecs(car);
+      return justStopped;
     }
   } catch (err) {
     entry.error = err;
@@ -298,17 +351,59 @@ async function refreshLive(car) {
   }
 }
 
-function drawLive(car) {
+// Watchdog rapid (500ms) pentru tranziție instantanee când expiră fereastra de 4.5s
+setInterval(() => {
+  if (!connected) return;
+  for (const car of fleet) {
+    const entry = live[car.vin];
+    if (!entry) continue;
+    const nowLive = isEntryLive(entry);
+    if (entry.wasLive && !nowLive) {
+      entry.wasLive = false;
+      drawLive(car);
+      renderReportsAndRecs(car);
+    }
+  }
+}, 500);
+
+// Coadă rapidă pentru harta live
+const playQueues = {};
+
+function drawLive(car, newPoints = []) {
   const entry = live[car.vin];
   const scene = scenes[car.vin];
   if (scene && entry?.points.length) {
-    const pts = entry.points;
-    scene.setPath(pts.map((p) => ({ x: p.x, y: p.y, z: p.z, rough: p.rough })));
-    const last = pts[pts.length - 1];
-    scene.setCar({ x: last.x, y: last.y, z: last.z, rough: last.rough });
+    const active = isEntryLive(entry);
+
+    if (!active) {
+      playQueues[car.vin] = [];
+      scene.clear();
+      scene.setCar({ x: 0, y: 0, z: 0, rough: 0 });
+    } else if (newPoints.length > 0 && newPoints.length < entry.points.length) {
+      newPoints.forEach((p) => {
+        scene.pushPoint({ x: p.x, y: p.y, z: p.z, rough: p.rough });
+        (playQueues[car.vin] ||= []).push(p);
+      });
+    } else {
+      playQueues[car.vin] = [];
+      scene.setPath(entry.points.map((p) => ({ x: p.x, y: p.y, z: p.z, rough: p.rough })));
+      const last = entry.points[entry.points.length - 1];
+      scene.setCar({ x: last.x, y: last.y, z: last.z, rough: last.rough });
+    }
   }
   updateOverlay(car);
 }
+
+setInterval(() => {
+  for (const car of fleet) {
+    const q = playQueues[car.vin];
+    const scene = scenes[car.vin];
+    if (q?.length && scene) {
+      const nextPt = q.length > 3 ? q.splice(0, q.length).pop() : q.shift();
+      scene.setCar({ x: nextPt.x, y: nextPt.y, z: nextPt.z, rough: nextPt.rough });
+    }
+  }
+}, 40);
 
 function updateOverlay(car) {
   const entry = live[car.vin];
@@ -341,10 +436,10 @@ function updateOverlay(car) {
     }
     return;
   }
-  const isLive = !pollingPaused && Date.now() - Date.parse(entry.receivedAt) <= LIVE_WINDOW_MS;
+  const active = isEntryLive(entry);
   if (pillEl) {
-    pillEl.className = isLive ? "live-pill" : "live-pill idle";
-    pillEl.textContent = isLive ? "● TRAIECTORIE 3D LIVE" : `● ULTIMA CURSĂ • ${fmtDateTime(entry.receivedAt)}`;
+    pillEl.className = active ? "live-pill" : "live-pill idle";
+    pillEl.textContent = active ? "● TRAIECTORIE 3D LIVE" : `● ULTIMA CURSĂ • ${fmtDateTime(entry.receivedAt)}`;
   }
   const last = entry.points[entry.points.length - 1];
   if (!last) {
@@ -352,21 +447,27 @@ function updateOverlay(car) {
     altEl.textContent = "";
     return;
   }
+  if (!active) {
+    posEl.textContent = `Vehicul parcat • ultima cursă: ${fmtTime(last.t)}`;
+    altEl.textContent = "Aștept pornirea unei curse noi";
+    return;
+  }
+  const stats = calcPathStats(entry.points);
   posEl.textContent = last.rough
-    ? `Suprafață: drum denivelat • ${fmtTime(last.t)}`
-    : `Poziție: X ${last.x.toFixed(1)} m, Y ${last.y.toFixed(1)} m • ${fmtTime(last.t)}`;
+    ? `Drum denivelat • Distanță: ${fmtDistance(stats.distanceM)} • ${fmtTime(last.t)}`
+    : `Distanță: ${fmtDistance(stats.distanceM)} • X ${last.x.toFixed(1)} m, Y ${last.y.toFixed(1)} m`;
   altEl.textContent = `Altitudine: ${fmtAlt(last.altitude)}${last.pitch != null ? ` • Pitch: ${last.pitch.toFixed(1)}°` : ""}`;
 }
 
 // ---------------------------------------------------------------- rapoarte (sesiuni din bază)
 async function refreshSessions() {
-  const { byVehicle } = await loadSessionsByVehicle(auth, [...seenDeviceIds, ...fleet.map((c) => c.vin)]);
+  const { byVehicle, deviceIds } = await loadSessionsByVehicle(auth, [...seenDeviceIds, ...fleet.map((c) => c.vin)]);
   sessionsByVin = byVehicle;
   lastSessionsLoad = Date.now();
 
   let added = false;
-  Object.keys(byVehicle).forEach((vin) => {
-    if (addCarIfMissing(vin)) added = true;
+  [...deviceIds, ...Object.keys(byVehicle)].forEach((id) => {
+    if (addCarIfMissing(String(id).trim().toUpperCase())) added = true;
   });
 
   if (added) {
@@ -380,13 +481,45 @@ async function refreshSessions() {
 function kmSince(sessions, iso) {
   if (!iso) return 0;
   const t = Date.parse(iso);
-  return sessions.filter((s) => Date.parse(s.startedAt) >= t).reduce((a, s) => a + (s.distanceM || 0), 0) / 1000;
+  return sessions.filter((s) => Date.parse(s.startedAt) >= t).reduce((a, s) => a + ((s.distanceM || 0) * DIST_SCALE), 0) / 1000;
 }
 
 function renderReportsAndRecs(car) {
   const tbody = document.getElementById(`reports-${car.vin}`);
   const recsEl = document.getElementById(`recs-${car.vin}`);
-  const sessions = sessionsByVin[car.vin] || [];
+  const baseSessions = sessionsByVin[car.vin] || [];
+  const entry = live[car.vin];
+  const active = isEntryLive(entry);
+
+  // Combinăm sesiunile din backend cu sesiunea activă din telemetrie pentru afișare instantanee
+  let sessions = baseSessions.map((s) => ({
+    ...s,
+    distanceM: (s.distanceM || 0) * DIST_SCALE
+  }));
+
+  if (entry?.sessionId && entry.points?.length) {
+    const liveStats = calcPathStats(entry.points);
+    const existingIdx = sessions.findIndex((s) => s.sessionId === entry.sessionId);
+    if (existingIdx >= 0) {
+      sessions[existingIdx] = {
+        ...sessions[existingIdx],
+        durationSec: Math.max(sessions[existingIdx].durationSec || 0, liveStats.durationSec),
+        distanceM: Math.max(sessions[existingIdx].distanceM || 0, liveStats.distanceM),
+        maxAltRelM: Math.max(sessions[existingIdx].maxAltRelM || 0, liveStats.maxAltRelM)
+      };
+    } else if (active) {
+      // Dacă sesiunea abia a pornit pe telefon și încă nu a ajuns în /sessions, o afișăm instant!
+      sessions.unshift({
+        sessionId: entry.sessionId,
+        deviceId: entry.latest?.deviceId || car.vin,
+        startedAt: entry.points[0].t || entry.receivedAt,
+        status: "live",
+        durationSec: liveStats.durationSec,
+        distanceM: liveStats.distanceM,
+        maxAltRelM: liveStats.maxAltRelM
+      });
+    }
+  }
 
   if (tbody) {
     if (!connected) {
@@ -396,16 +529,18 @@ function renderReportsAndRecs(car) {
     } else {
       tbody.innerHTML = sessions
         .slice(0, 15)
-        .map(
-          (s) => `
+        .map((s, idx) => {
+          const isSessionLive =
+            !pollingPaused && idx === 0 && active && entry?.sessionId === s.sessionId;
+          return `
         <tr data-vin="${escapeHtml(car.vin)}" data-session="${escapeHtml(s.sessionId)}" data-device="${escapeHtml(s.deviceId)}">
           <td><strong>${fmtDateTime(s.startedAt)}</strong></td>
-          <td>${s.status === "live" && !pollingPaused ? `<span class="badge-active">● În desfășurare</span>` : `<span class="badge-done">Finalizat</span>`}</td>
+          <td>${isSessionLive ? `<span class="badge-active">● În desfășurare</span>` : `<span class="badge-done">Finalizat</span>`}</td>
           <td>${fmtDuration(s.durationSec)}</td>
           <td>${fmtDistance(s.distanceM)}</td>
           <td>${fmtAlt(s.maxAltRelM)}</td>
-        </tr>`
-        )
+        </tr>`;
+        })
         .join("");
       tbody.querySelectorAll("tr[data-session]").forEach((row) => {
         row.addEventListener("click", () => {
@@ -421,7 +556,7 @@ function renderReportsAndRecs(car) {
       recsEl.innerHTML = "";
       return;
     }
-    const stats = { ...statsFromSessions(sessions), kmSinceOdometer: kmSince(sessions, car.odometerSetAt) };
+    const stats = { ...statsFromSessions(sessions), kmSinceOdometer: kmSince(baseSessions, car.odometerSetAt) };
     recsEl.innerHTML = renderRecommendations(
       buildRecommendations(car, stats),
       2,
@@ -430,43 +565,27 @@ function renderReportsAndRecs(car) {
   }
 }
 
-// ---------------------------------------------------------------- bucla de actualizare (cu auto-stop la Stop de pe telefon)
+// ---------------------------------------------------------------- bucla de actualizare continuă în timp real
 let ticking = false;
 async function tick(force = false) {
   if (!connected || pollingPaused || ticking) return;
   ticking = true;
   try {
-    if (force || Date.now() - lastSessionsLoad >= sessionsRefreshMs) {
-      await refreshSessions();
-    }
-
     const activeCars = auth.vehicleId
       ? fleet.filter((c) => c.vin === auth.vehicleId)
       : fleet;
 
     const results = await Promise.all(activeCars.map((car) => refreshLive(car)));
-    const anyNewData = results.some(Boolean);
+    const stateChanged = results.some(Boolean);
 
-    const allStale =
-      activeCars.length > 0 &&
-      activeCars.every((c) => (live[c.vin]?.staleCount || 0) >= STALE_POLLS_BEFORE_STOP);
-
-    if (!force && !anyNewData && allStale) {
-      pollingPaused = true;
-      updateConnectButton();
-      activeCars.forEach(updateOverlay);
-      fleet.forEach(renderReportsAndRecs);
-      setBadge("Sesiune oprită • În așteptare", false);
-      setHint("Nu mai vin date noi de pe telefon (Stop). Cererile s-au oprit automat. Apasă „Reia Live” la următoarea cursă.");
-      return;
+    if (force || stateChanged || Date.now() - lastSessionsLoad >= sessionsRefreshMs) {
+      await refreshSessions();
     }
 
     const okCars = fleet.filter((c) => live[c.vin] && !live[c.vin].error).length;
-    const liveCars = fleet.filter(
-      (c) => live[c.vin]?.receivedAt && Date.now() - Date.parse(live[c.vin].receivedAt) <= LIVE_WINDOW_MS
-    ).length;
+    const liveCars = fleet.filter((c) => isEntryLive(live[c.vin])).length;
 
-    setBadge(liveCars ? `LIVE API • ${liveCars} în cursă` : "API conectat", true);
+    setBadge(liveCars ? `LIVE API • ${liveCars} în cursă` : "API conectat • Live activ", true);
     setHint(
       fleet.length
         ? `Conectat ca „${auth.ownerId}” • ${okCars}/${fleet.length} vehicule • actualizat ${new Date().toLocaleTimeString("ro-RO")}`
@@ -504,7 +623,7 @@ function thumbFor(car, imgEl) {
 }
 
 function renderFleet() {
-  disposeScenes();                       // <-- NOU (prima linie)
+  disposeScenes();
   const grid = document.getElementById("fleet-grid");
   grid.innerHTML = "";
 
