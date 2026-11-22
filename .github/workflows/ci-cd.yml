@@ -1,0 +1,171 @@
+name: TeamVerity CI and CD
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: teamverity-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '24'
+  API_PATH: src/backend/api
+  WEB_PATH: src/web
+
+jobs:
+  check:
+    name: Check API web and Bicep
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            src/backend/api/package-lock.json
+            src/web/package-lock.json
+
+      - name: Install API dependencies
+        run: npm ci
+        working-directory: ${{ env.API_PATH }}
+
+      - name: Check API syntax schemas and migration names
+        run: npm run check
+        working-directory: ${{ env.API_PATH }}
+
+      - name: Run API tests
+        run: npm test
+        working-directory: ${{ env.API_PATH }}
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: ${{ env.WEB_PATH }}
+
+      - name: Check web JavaScript
+        run: npm run check
+        working-directory: ${{ env.WEB_PATH }}
+
+      - name: Build dashboard
+        run: npm run build
+        working-directory: ${{ env.WEB_PATH }}
+
+      - name: Compile infrastructure
+        run: |
+          az bicep build --file infrastructure/main.bicep --outfile "$RUNNER_TEMP/main.json"
+          az bicep build --file infrastructure/dashboard.bicep --outfile "$RUNNER_TEMP/dashboard.json"
+
+  deploy:
+    name: Deploy API and dashboard
+    needs: check
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name != 'pull_request' &&
+      vars.ENABLE_DEPLOY == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FUNCTION_APP_NAME: ${{ vars.AZURE_FUNCTIONAPP_NAME }}
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      WEB_STORAGE_ACCOUNT: ${{ vars.AZURE_WEB_STORAGE_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            src/backend/api/package-lock.json
+            src/web/package-lock.json
+
+      - name: Install production API dependencies
+        run: npm ci --omit=dev
+        working-directory: ${{ env.API_PATH }}
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: ${{ env.WEB_PATH }}
+
+      - name: Build dashboard
+        run: npm run build
+        working-directory: ${{ env.WEB_PATH }}
+
+      - name: Sign in to Azure using GitHub OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Generate public dashboard configuration
+        shell: bash
+        run: |
+          test -n "$WEB_STORAGE_ACCOUNT" || { echo 'Set the AZURE_WEB_STORAGE_NAME repository variable.' >&2; exit 1; }
+          host=$(az functionapp show --name "$FUNCTION_APP_NAME" --resource-group "$RESOURCE_GROUP" --query defaultHostName --output tsv)
+          test -n "$host"
+          dashboard_url=$(az storage account show --name "$WEB_STORAGE_ACCOUNT" --resource-group "$RESOURCE_GROUP" --query primaryEndpoints.web --output tsv)
+          test -n "$dashboard_url" && test "$dashboard_url" != 'None'
+          echo "FUNCTION_BASE_URL=https://$host" >> "$GITHUB_ENV"
+          echo "DASHBOARD_URL=$dashboard_url" >> "$GITHUB_ENV"
+          echo "DASHBOARD_ORIGIN=${dashboard_url%/}" >> "$GITHUB_ENV"
+          export PUBLIC_API_BASE_URL="https://$host/api"
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          const config = {
+            apiBaseUrl: process.env.PUBLIC_API_BASE_URL,
+            defaultDeviceId: 'phone-stefana-01',
+            pollIntervalMs: 3000
+          };
+          writeFileSync('src/web/dist/config.js', 'window.APP_CONFIG = ' + JSON.stringify(config, null, 2) + ';\n');
+          NODE
+
+      - name: Record deployed commit in API settings
+        run: az functionapp config appsettings set --name "$FUNCTION_APP_NAME" --resource-group "$RESOURCE_GROUP" --settings APP_BUILD_VERSION="$GITHUB_SHA" --output none
+
+      - name: Allow the dashboard origin on the API
+        run: az functionapp cors add --name "$FUNCTION_APP_NAME" --resource-group "$RESOURCE_GROUP" --allowed-origins "$DASHBOARD_ORIGIN" --output none
+
+      - name: Deploy Azure Functions API
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ vars.AZURE_FUNCTIONAPP_NAME }}
+          package: src/backend/api
+          respect-funcignore: true
+
+      - name: Deploy dashboard to Azure Storage
+        shell: bash
+        run: |
+          test -f src/web/dist/index.html
+          test -f src/web/dist/config.js
+          az storage blob upload-batch --account-name "$WEB_STORAGE_ACCOUNT" --destination '$web' --source src/web/dist --auth-mode login --overwrite true --only-show-errors --output none
+
+      - name: Verify the dashboard endpoint
+        shell: bash
+        run: |
+          curl --fail --silent --show-error --retry 6 --retry-all-errors --retry-delay 5 --max-time 20 "${DASHBOARD_URL%/}/" --output "$RUNNER_TEMP/dashboard.html"
+          test -s "$RUNNER_TEMP/dashboard.html"
+
+      - name: Verify API health and build metadata
+        shell: bash
+        run: |
+          curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 10 --max-time 20 "$FUNCTION_BASE_URL/api/health" --output "$RUNNER_TEMP/health.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const health = JSON.parse(readFileSync(process.env.RUNNER_TEMP + '/health.json', 'utf8'));
+          if (health.storageMode !== 'sql' || health.database !== 'ok' || health.build !== process.env.GITHUB_SHA) {
+            throw new Error('The API must use SQL, reach its database, and report the recorded build commit.');
+          }
+          console.log('API health, SQL connectivity, and build metadata verified.');
+          NODE

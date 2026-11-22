@@ -19,6 +19,8 @@ import { statsFromSessions, statsFromReadings, buildRecommendations, renderRecom
 //    GET /devices/{deviceId}/readings?sessionId=&type= citirile brute (accelerometru, magnetometru, barometru)
 //  URL: report.html?vin=<VIN>&session=<sessionId>&device=<deviceId>
 // ======================================================================
+const DIST_SCALE = 2.6; // același factor de calibrare ca în dashboard (app.js)
+
 const params = new URLSearchParams(location.search);
 const vin = (params.get("vin") || "").toUpperCase();
 const sessionId = params.get("session");
@@ -97,7 +99,10 @@ async function load() {
     showError(err.message);
     return false;
   }
-  summary = track.summary;
+  summary = {
+    ...track.summary,
+    distanceM: (track.summary?.distanceM || 0) * DIST_SCALE
+  };
   deviceId = deviceId || summary.deviceId;
 
   const [acc, mag, baro] = await Promise.allSettled([
@@ -115,7 +120,7 @@ async function load() {
   let fallbackX = 0;
   points = (track.points || []).map((p, i) => {
     const hasPos = p.x != null && p.y != null;
-    if (!hasPos) fallbackX = p.distanceM ?? i * 5;
+    if (!hasPos) fallbackX = (p.distanceM ?? i * 5) * DIST_SCALE;
     return {
       t: p.t,
       x: hasPos ? p.x : fallbackX,
@@ -130,6 +135,15 @@ async function load() {
       advice: p.advice
     };
   });
+
+  // Recalculăm distanța cumulată din puncte dacă e mai mare decât rezumatul backend
+  if (points.length >= 2) {
+    let pathDist = 0;
+    for (let i = 1; i < points.length; i++) {
+      pathDist += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+    }
+    summary.distanceM = Math.max(summary.distanceM, pathDist * DIST_SCALE);
+  }
 
   renderHeader(track.totalPoints);
   renderTable();
@@ -267,9 +281,13 @@ function render3d() {
 }
 
 function showIndex(idx, snap = false) {
-  const p = points[idx];
+  const p = points[Math.round(idx)];
   if (!p) return;
-  scene3d.setCarAt(idx, snap);
+  // Mapăm indexul din points la lungimea netezită din scene3d pentru sincronizare exactă
+  const sceneRatio = points.length > 1 ? idx / (points.length - 1) : 0;
+  const sceneIdx = scene3d.pts.length > 1 ? sceneRatio * (scene3d.pts.length - 1) : 0;
+  scene3d.setCarAt(sceneIdx, snap);
+
   const maxAlt = summary.maxAltRelM ?? Math.max(...points.map((q) => q.altitude));
   altReadout.textContent = fmtAlt(p.altitude);
   $("val-alt").textContent = `${fmtAlt(maxAlt)} / ${fmtAlt(p.altitude)}`;
@@ -297,19 +315,29 @@ slider.addEventListener("input", (e) => {
   showIndex(currentIndex);
 });
 
+// Redare lentă și lină exclusiv în raport (0.35 puncte la fiecare 120ms)
 setInterval(() => {
   if (!isPlaying || !points.length) return;
-  currentIndex = (currentIndex + 1) % points.length;
-  slider.value = currentIndex;
-  showIndex(currentIndex, currentIndex === 0);
-}, 90);
+  const next = currentIndex + 0.35;
+  if (next >= points.length - 1) {
+    currentIndex = points.length - 1;
+    slider.value = Math.round(currentIndex);
+    showIndex(currentIndex);
+    isPlaying = false;
+    playPauseBtn.textContent = "▶ Redă";
+    return;
+  }
+  currentIndex = next;
+  slider.value = Math.round(currentIndex);
+  showIndex(currentIndex);
+}, 120);
 
-// cursa live se reîncarcă la 10 s
+// cursa live se reîncarcă la 5 s
 load().then((ok) => {
   if (ok && summary?.status === "live") {
     const timer = setInterval(async () => {
       await load();
       if (summary?.status !== "live") clearInterval(timer);
-    }, 10000);
+    }, 5000);
   }
 });

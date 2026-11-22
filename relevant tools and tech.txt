@@ -1,26 +1,160 @@
-Cloud & Infrastructure (Azure)
--Microsoft Azure - Cloud platform hosting the backend compute, database, and storage infrastructure inside resource group rg-teamverity-eu
--Azure Functions (Node.js): Serverless compute hosting the REST API (teamverity-api-adina01utcn) for telemetry and session queries.
--Azure SQL Database & Azure SQL Server
--Azure Storage Account: Backing storage for the Azure Functions runtime and internal state management.
--Microsoft Entra ID (Azure AD) & Managed Identity: Passwordless authentication and role-based access control between the Function App, Azure Storage, and Azure SQL Server.
--Azure Bicep (infrastructure/main.bicep): Infrastructure-as-Code (IaC) templates for declarative, repeatable provisioning of Azure resources
+TEAMVERITY - VERITY DRIVE
+RELEVANT TOOLS AND TECHNOLOGIES
 
-Backend & Security
--Node.js & JavaScript: Core runtime and implementation language for the serverless API endpoints (telemetry, devices, sessions, health).
--mssql (Node.js SQL Driver): Database client
--SHA-256 Token Hashing & Bearer Authentication (DEMO_TENANTS_JSON): Multi-tenant authentication mechanism verifying hashed secret tokens scoped to specific ownerId and ISO 3779 VINs.
--CORS (Cross-Origin Resource Sharing): Configured on the Azure Function App to securely allow browser requests from the web dashboard.
+Repository: https://github.com/CAdinaDenisa/DataInfrastructure_TeamVerity
+Source baseline: main, commit 9352946af6e8a1b01d45f3ce95e5772622165665.
 
-Mobile Telemetry Client (src/phone-app)
--React Native & Expo 
--Expo Sensors, Location, Crypto & Secure Store: Hardware sensor capture, local offline queuing, retry logic, and secure storage of the API token and VIN.
+1. PROJECT PURPOSE AND APPLICATION FLOW
 
-Web Dashboard (src/web)
--HTML5, CSS3 & Vanilla JavaScript 
+Verity Drive is a phone-to-cloud vehicle telemetry demonstrator. A physical
+phone represents one vehicle, identified by a VIN. It captures real phone
+sensor readings and sends structured JSON over HTTPS to an Azure Functions
+API. The API authenticates the request, validates and processes the readings,
+and stores them in Azure SQL Database. A browser dashboard queries that API
+for vehicle activity, historical sessions, charts, and a 3D representation.
+Two phones can send concurrently using different VINs under the same owner.
 
-DevOps, CI/CD & Developer Tooling
--Git & GitHub
--GitHub Actions (.github/workflows): Automated CI/CD pipelines for building, validating, and deploying infrastructure and application code.
--Azure CLI (az) & Azure Functions Core Tools (func): Command-line tools for deploying Function App code, configuring App Settings, and managing CORS rules.
--Visual Studio Code: Primary IDE used across infrastructure, backend, mobile, and web development.
+2. MOBILE APPLICATION - ANA
+
+Location: src/phone-app/
+
+- React Native and React provide the mobile application and its interface.
+- Expo provides development tooling and the Expo Go demonstration workflow.
+- expo-sensors reads the accelerometer, magnetometer, and barometer where
+  supported. expo-location requests foreground location and reads GPS data.
+- Sensor samples are requested every 500 ms; the current capture interval is
+  one event every 2 seconds. Actual sensor/GPS delivery depends on the device.
+- AsyncStorage persists the VIN and pending/rejected event queues. Retries
+  retain the event ID; acknowledged events are removed from the queue.
+- expo-secure-store stores an internal phone identifier. The token entered
+  through the current mobile UI is kept in memory, not persisted by that UI.
+- The transmitted deviceId and vehicleId are the VIN. The internal phone UUID
+  is a separate diagnostic identifier. A new session ID identifies a trip.
+- expo-crypto is a declared dependency. The current ID helper also has a
+  JavaScript UUID fallback; it should not be described as a security token
+  generator. Server demo tokens are generated with Node's crypto module.
+
+3. BACKEND AND PROCESSING - STEFANA
+
+Location: src/backend/api/
+
+- Node.js and JavaScript implement the Azure Functions v4 programming model.
+  @azure/functions registers the HTTP endpoints.
+- The REST API includes health, telemetry ingestion/query, device state and
+  readings, and session summaries/tracks. The browser reads through this API;
+  neither the browser nor a phone connects directly to SQL.
+- ajv and ajv-formats validate the JSON contracts and timestamp formats.
+- Sensor fusion derives orientation from acceleration/magnetic readings,
+  relative altitude from pressure or GPS where available, and horizontal
+  coordinates relative to a session's GPS origin. Session processing derives
+  distance and other summary values from stored observations.
+- The mssql driver accesses SQL. @azure/identity supplies Azure credentials
+  for the passwordless cloud connection.
+- The API accepts current phone events and the documented batch format.
+  Event/batch IDs and payload hashes support idempotent retries: a repeated
+  identical submission returns 200; reusing an ID with changed content returns
+  409. A new successful write returns 201.
+- Node's built-in test runner verifies validation, authorization, processing,
+  HTTP behavior, and session calculations. SQL tests require a separate local
+  database setup and are not equivalent to the default unit-test run.
+
+4. DATABASE AND STORAGE - STEFANA / ADINA
+
+- Azure SQL Database is the persistent cloud telemetry database. The Bicep
+  template selects Basic, 5 DTU, with a 2 GB maximum size.
+- Microsoft Entra-only authentication and the Function App's system-assigned
+  managed identity provide database access without a SQL password in the
+  phone, browser, or cloud application code.
+- Versioned SQL migrations are in src/backend/database/migrations/. They
+  create/update devices, sessions, batches, sensor_readings, and device_states.
+  The migration runner also maintains schema_migrations.
+- The SQL administrator applies migrations and the Function identity grant.
+  The grant supplies CONNECT and SELECT/INSERT/UPDATE on schema dbo; normal
+  application execution does not require schema-administration privileges.
+- Azure Storage supports the Functions host, deployment packages, and host
+  services. A separate dashboard storage account hosts the static website.
+  Application telemetry is stored in SQL, not Azure Table Storage. Host storage
+  roles that mention Tables do not change the application database choice.
+- For local development, Docker Compose provides SQL Server 2022 Developer
+  and Azurite. Memory storage is an optional non-persistent test mode.
+
+5. WEB DASHBOARD - DANIELA
+
+Location: src/web/
+
+- HTML, CSS, and native JavaScript modules implement the browser dashboard.
+  This frontend is not a React or Vite application.
+- Chart.js renders charts. Three.js and OrbitControls support the 3D scene.
+  The build copies the required vendor files into the static distribution.
+- The dashboard reads live and historical data from the API using polling.
+  It can discover vehicles from stored device/session data and show multiple
+  VINs. User-supplied names/labels are not a substitute for telemetry records.
+- The build output is src/web/dist/. Azure Storage static website hosting
+  serves that directory. The static files are public; API data access still
+  requires the owner token and matching vehicle permissions.
+- API configuration is supplied through config.js. Current browser code can
+  read an apiToken configuration property or saved browser authentication.
+  The supplied instructions use browser-local authentication instead of
+  publishing a real token in config.js or in a public deployment artifact.
+- The current browser implementation stores its authentication record in
+  localStorage. This is a demo credential mechanism, not an enterprise login
+  system. The current index page has no token-entry control; the running
+  instructions explain how to initialize the existing mechanism privately.
+
+6. CLOUD INFRASTRUCTURE AND AUTOMATION - ADINA
+
+- Microsoft Azure hosts the Function App, Azure SQL, and Storage resources.
+  The configured Function App name is teamverity-api-adina01utcn. Its actual
+  hostname and the resource group must be obtained from the deployed account.
+- Bicep provides repeatable infrastructure declarations:
+    infrastructure/main.bicep: Function App/FC1 Flex Consumption plan,
+      Functions host/package storage, Azure SQL, identity, host roles,
+      application settings, and optional SQL firewall rules.
+    infrastructure/dashboard.bicep: dedicated StorageV2 static website in
+      Austria East by default, plus GitHub identity permissions for uploads.
+- The dashboard uses Storage website hosting because the subscription's
+  supplied region policy has no overlap with Static Web Apps' supported
+  locations. No Static Web Apps deployment token is required by this workflow.
+- The Function App identity is distinct from teamverity-github, the
+  user-assigned identity used by GitHub Actions for deployment.
+- GitHub OIDC federates the main branch to the deployment identity, avoiding
+  a stored Azure client secret in GitHub. That identity receives scoped
+  deployment and website-upload permissions; it is not the SQL runtime user.
+- .github/workflows/ci-cd.yml uses GitHub-hosted Ubuntu runners. CI installs
+  dependencies, checks/tests the backend, checks/builds the web app, and
+  compiles both Bicep files. Deployment is gated to main with ENABLE_DEPLOY=true.
+- CD deploys Functions and uploads the website to the Storage $web container,
+  generates the public API URL configuration, adds dashboard CORS, and checks
+  API health/SQL connectivity and recorded build metadata.
+- This workflow does not apply infrastructure, run SQL migrations, or build
+  and distribute a mobile binary. Those are separate setup/development steps.
+- Azure CLI, Functions Core Tools v4, Git, GitHub, PowerShell, and VS Code
+  support setup, operation, review, and troubleshooting.
+
+7. DEMO ACCESS CONTROL AND OPERATIONAL LIMITS
+
+The server stores a SHA-256 hash of each demo owner token in DEMO_TENANTS_JSON.
+Clients send the original token using Authorization: Bearer. Access is scoped
+by ownerId and permitted vehicleIds, with an optional UTC expiry. Explicit
+VIN lists are used in the submitted setup to avoid ambiguity with older
+already-deployed wildcard behavior. This is application-level bearer-token
+validation; it is separate from Azure Functions host/function keys.
+
+The phone is a foreground sensor source. Device permissions, sensor hardware,
+GPS accuracy, connectivity, and app lifecycle affect the readings. The demo
+is not a calibrated vehicle instrument or validated crash-detection system.
+Any maintenance recommendations are demonstration rules rather than an OEM
+service assessment. The provided instructions include practical verification
+steps instead of asserting that the current cloud account has passed them.
+
+8. REFERENCE MATERIAL
+
+Project code and configuration are the authority for the implementation above.
+Additional official documentation:
+- https://docs.expo.dev/
+- https://reactnative.dev/docs/getting-started
+- https://learn.microsoft.com/en-us/azure/azure-functions/
+- https://learn.microsoft.com/en-us/azure/azure-sql/database/
+- https://learn.microsoft.com/en-us/azure/storage/blobs/storage-blob-static-website
+- https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/overview
+- https://docs.github.com/en/actions
